@@ -20,7 +20,8 @@
                  播放速度可调，叠在画面右上角，总长度自动对齐主视频
 
 【界面能看到什么】
-    总进度在处理阶段平滑估算，单条完成时按已处理视频数校正；处理按钮运行时显示「处理中…」并禁用。
+    总进度只吃真实数字（低清副本 15% / 画中画 25% / 合成 60%），按每条视频的时长加权，
+    取值为只增不减，不做任何估算动画；处理按钮运行时显示「处理中…」并禁用。
     资源行显示整机 CPU 和整机内存，每秒采样，不将 Python RSS 当成工具总占用。
     日志仅保留批次结果与必要异常，每批清空，最多 20 行。
     「打开副本目录」直接打开当前画中画目录里的 .pip_small，不创建空缓存。
@@ -36,6 +37,19 @@
       g) 随机轻微缩放（1.00~1.06 倍，再裁回固定尺寸，画面像素发生位移）
       h) 随机轻微调色（亮度/对比度/饱和度微扰，肉眼几乎无感但改变像素值）
       i) 画中画位置随机微抖动（±3px）
+
+【画中画轨道必须统一色彩空间】（2026-09-16 修复，改动滤镜链前必读）
+    素材池混着三种色彩空间：bt709、bt2020nc + arib-std-b67（手机 HLG）、bt470bg（BT.601）。
+    不统一就把它们拼进同一条画中画轨，ffmpeg 会在每个色彩切换点
+    "Reconfiguring filter graph because video parameters changed"，主合成的帧时间戳
+    随之错乱、大量丢帧，成片视频轨只剩源的一半（例：video 161.97s/4853 帧 而
+    audio 323.22s/13920 帧）。现象是播放到两分钟左右画面定格、只剩声音、音画错位；
+    并发处理时 100% 复现，单条干净素材的轨道则不会出现。
+    因此 _clip_filter() 的每个 scale 都带 ":out_color_matrix=bt709"（**真正转换像素
+    矩阵**），链末再用 setparams 统一标记；_encode_pip_batch() 同时写容器级
+    -colorspace/-color_primaries/-color_trc bt709。
+    **只写 setparams 不改像素会让 BT.601 素材偏色**（回归测试里绿画中画的像素断言会失败）。
+    这个故障是"静默丢帧"：文件能播、时长正常，只能靠 ffprobe 对比视频轨与音轨帧数发现。
 
 【性能设计】（改代码时请保持这些约束，否则会又慢又吵）
     0. 画中画素材先降成"低清副本"再拼接（本项目收益最大的一项，详见
@@ -67,7 +81,7 @@
        避免高频刷新拖慢 Tk 主线程；同轮状态和进度也合并刷新。
     7. 单次成片只编码两遍：画中画片段一次 + 最终合成一次（首帧/产品图/画中画
        全部在同一条 filter_complex 里完成）。
-       GUI 处理阶段平滑估算总进度、单条完成时精确校正，处理按钮在运行时禁用。
+       总进度用 VideoProgress 折出的真实完成度、按视频时长加权，不做估算。
        副本目录按钮复用 small_dir_of()，不创建或删除缓存。
     8. 系统资源监控每秒采样一次，用的都是各平台的原生廉价接口（微秒级），
        不引入 psutil 等第三方依赖，也不做任何可能阻塞界面的操作。
@@ -338,12 +352,28 @@ RND_ZOOM = 1.06               # 随机缩放上限（1.0 = 关闭）
 RND_COLOR = True              # 随机亮度/对比度/饱和度微扰
 RND_JITTER = 3                # 画中画位置随机抖动像素（0 = 关闭）
 
-# ---- 编码参数 ----
-CRF = 18                      # x264 质量，18 接近视觉无损
-PRESET_MAP = {                # 界面下拉 → ffmpeg preset（越快越省时间，压缩率略低）
-    "快速": "veryfast",
-    "均衡": "fast",
-    "高质量": "medium",
+# ---- 编码参数（preset 与 CRF 是一组，改之前先看实测表） ----
+# 成片的耗时几乎全在编码：实测"只解码不编码"0.34s，而完整命令 6.7s —— 滤镜、overlay、
+# 缩放、素材解码全在噪声里（见 README「性能实测」）。所以**唯一有效的提速手段是降低
+# 编码器工作量**，而 preset 就是那个总开关。
+# 实测（1080p/20s 竖屏，同一条滤镜链，只换编码档位，3 轮取中位；5 并发下同向）：
+#     veryfast  /CRF18   1.00x   27.8MB   SSIM 1.0000   ← 旧默认
+#     superfast /CRF18   1.43x   37.2MB   SSIM 0.9889
+#     superfast /CRF20   1.57x   28.6MB   SSIM 0.9870   ← 现默认（提速且体积持平）
+#     superfast /CRF21   1.65x   25.0MB   SSIM 0.9858
+#     ultrafast /CRF24   2.59x   51.0MB   SSIM 0.9678   ← 体积近两倍，不采用
+#     fast      /CRF18   0.35x   26.1MB   SSIM 0.9909   ← 比 veryfast 慢 2.9 倍
+# 结论：preset 每降一档收益约 40%，而 CRF 同时 +2 可把体积找回来 —— 所以默认档位
+# 定为 superfast/CRF20。注意**不要为了提速换硬件编码**：苹果媒体引擎是共享资源，
+# 单条 2.27x，5 并发只剩 1.06x（详见 README「硬件加速实测」）。
+CRF = 20                      # x264 质量；与 preset 配套（20 配 superfast，体积≈旧的 veryfast/18）
+PRESET_MAP = {                # 界面下拉 → ffmpeg preset
+    # 旧配置里存的"快速/均衡/高质量"三个名字保持不变，映射整体上移一档：
+    # 老用户重新打开就自动变快，不需要迁移配置。
+    "快速": "superfast",      # 默认档，实测 1.57x
+    "均衡": "veryfast",       # 原为 fast（实测只有 0.35x，名不副实）
+    "高质量": "fast",         # 原为 medium
+    "最高质量": "medium",      # 压得最狠，慢，仅在需要极限压缩率时用
 }
 DEFAULT_PRESET = "快速"
 DEFAULT_WORKERS = 5           # 默认并发线程数
@@ -2146,6 +2176,14 @@ def _clip_filter(pw, ph, zoom, flip_h, color_on, color_params, fps_str, crop_fil
     :param speed       : 变速倍数，1.0 表示不变速
     """
     parts = []
+    # ---- 色彩统一：素材池里混着 bt709 / bt2020(HLG) / bt470bg(601) 三种。
+    # 它们被拼到同一条画中画轨以后，ffmpeg 播到色彩切换点就会
+    # "Reconfiguring filter graph because video parameters changed"，
+    # 滤镜图一重配置，主合成的帧时间戳就错乱——实测成片视频轨只剩源的一半
+    # （日志 drop=3643~6296 帧），播到两分钟画面卡死、只剩声音。
+    # 所以这里在缩放的同时把像素**真正转换**到 bt709（不是只改标记，
+    # 只改标记会让 601 素材偏色），末尾再用 setparams 把标记也统一。
+    cm = ":out_color_matrix=bt709"
     # 统一时间基准：无论从哪里截取，都让片段从 0 时刻开始，拼接时才不会出现空隙。
     # 变速（加速）就是在这里实现的：PTS 除以倍数，播放器就会用更短的时间放完同样的画面。
     parts.append(f"setpts=(PTS-STARTPTS)/{max(0.01, speed):.6f}")
@@ -2162,19 +2200,21 @@ def _clip_filter(pw, ph, zoom, flip_h, color_on, color_params, fps_str, crop_fil
         if zoom > 1.0001:
             # 随机缩放：先放大到略大于目标，再裁回，画面像素发生位移（抗查重）
             parts.append(f"scale={_even(pw * zoom)}:{_even(ph * zoom)}"
-                         f":force_original_aspect_ratio=increase")
+                         f":force_original_aspect_ratio=increase{cm}")
         else:
-            parts.append(f"scale={pw}:{ph}:force_original_aspect_ratio=increase")
+            parts.append(f"scale={pw}:{ph}:force_original_aspect_ratio=increase{cm}")
         parts.append(f"crop={pw}:{ph}")
     else:
-        parts.append(f"scale={pw}:{ph}:force_original_aspect_ratio=decrease")
+        parts.append(f"scale={pw}:{ph}:force_original_aspect_ratio=decrease{cm}")
         parts.append(f"pad={pw}:{ph}:(ow-iw)/2:(oh-ih)/2:black")
 
     if color_on:
         b, c, s = color_params
         parts.append(f"eq=brightness={b:.4f}:contrast={c:.4f}:saturation={s:.4f}")
 
-    parts += [f"fps={fps_str}", "setsar=1", "format=yuv420p"]
+    parts += [f"fps={fps_str}", "setsar=1", "format=yuv420p",
+              # 与上面的色彩统一配套：把标记也写成 bt709
+              "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"]
     return ",".join(parts)
 
 
@@ -2295,6 +2335,10 @@ def _encode_pip_batch(batch, dst, registry, hw=None):
             "-an",                                     # 画中画永远静音
             "-c:v", "libx264", "-preset", PIP_BATCH_PRESET, "-crf", str(CRF),
             "-pix_fmt", "yuv420p",
+            # 与 _clip_filter 末尾的 setparams 配套：把色彩标记写进容器/SPS，
+            # 这样 concat demuxer 用 -c copy 拼出来的整条画中画轨都是纯 bt709，
+            # 不会再出现 HDR/bt709 交替导致主合成重配置滤镜图（详见 _clip_filter）。
+            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
             "-threads", str(PIP_BATCH_THREADS),
             dst]
     _run(cmd, registry)
@@ -3474,7 +3518,8 @@ class App(tk.Tk):
             "rnd_color": self.rnd_color.get(),
             "rnd_jitter": int(self._num(self.rnd_jitter, 0, 0, 20)),
             # 运行
-            "preset": PRESET_MAP.get(self.preset_var.get(), "veryfast"),
+            # 兜底取"默认档"的映射值，不要写死 veryfast —— 写死会让默认档形同虚设
+            "preset": PRESET_MAP.get(self.preset_var.get(), PRESET_MAP[DEFAULT_PRESET]),
             "workers": workers,
             # 硬件加速：只作用于解码（见 hw_decode_args 的实测表），编码始终用 libx264
             "hwaccel": self.hwaccel_var.get(),
