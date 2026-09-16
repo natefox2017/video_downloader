@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 启动「视频批处理工具」图形界面。
+# 启动「视频批处理工具」图形界面（脚本就在项目根目录，双击/./run.sh 均可）。
 #
 #   ./run.sh            正常启动
-#   ./run.sh --ui ...   （参数原样透传给 python 模块）
+#   PYTHON=/path/to/python3 ./run.sh    指定解释器
 #
-# 免安装运行：把 video_frame_tool/src 挂到 PYTHONPATH 再跑 -m video_frame_tool。
-# 若已 pip install -e video_frame_tool，也可以直接用 video-frame-tool 命令，本脚本仍适用。
+# 免安装运行：把本目录的 src 挂到 PYTHONPATH 再跑 -m video_frame_tool。
+# 若已 pip install -e .，也可以直接用 video-frame-tool 命令，本脚本仍适用。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$ROOT/video_frame_tool/src"
+SRC="$ROOT/src"
 
 if [ ! -d "$SRC/video_frame_tool" ]; then
     echo "找不到源码目录：$SRC/video_frame_tool" >&2

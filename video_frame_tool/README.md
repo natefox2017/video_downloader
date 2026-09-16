@@ -15,6 +15,7 @@
 ```
 video_frame_tool/
 ├── pyproject.toml                    打包配置（src 布局）
+├── run.sh                            一键启动（免安装，含环境自检）
 ├── README.md
 ├── src/video_frame_tool/
 │   ├── __init__.py                   重新导出所有顶层名字，兼容 `import video_frame_tool as tool`
@@ -40,16 +41,19 @@ video_frame_tool/
 ## 安装与运行
 
 ```bash
-# 方式一：不安装，直接跑
+# 方式一：一键启动（推荐，免安装）
+./run.sh
+
+# 方式二：不安装，直接用模块跑
 PYTHONPATH=src python3 -m video_frame_tool
 
-# 方式二：装成命令（推荐，之后随处可用）
+# 方式三：装成命令（之后随处可用）
 pip install -e .
 video-frame-tool
 ```
 
-上层仓库根目录还有一个 `../run.sh`：自动把 `src` 挂到 `PYTHONPATH` 并做环境自检
-（Python / tkinter / ffmpeg），无需安装即可启动。
+`run.sh` 会自动把 `src` 挂到 `PYTHONPATH` 并做环境自检
+（Python / tkinter / ffmpeg），缺什么直接给修复命令；指定解释器用 `PYTHON=/path/to/python3 ./run.sh`。
 
 ## 开发约定
 
