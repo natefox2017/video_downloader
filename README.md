@@ -22,6 +22,7 @@
 ├── panel.html/.css/.js     # iframe 面板界面（原生 JS，无框架）
 ├── images/                 # 扩展图标 16/32/128
 ├── video_frame_tool/       # Python GUI 视频批处理工具（独立子项目，自己一个 README）
+├── run.sh                  # 一键启动 Python 工具（免安装，含环境自检）
 ├── logo.png                # Python 工具的品牌图（可选；删掉就用包里内嵌的那份）
 ├── .github/workflows/ci.yml# CI：JS 语法 + manifest 校验 + Python 编译检查
 ├── AGENTS.md               # 给 AI 编码助手的项目须知（架构约束、易踩坑点）
@@ -150,6 +151,16 @@
 
 Python 工具已从仓库根的单文件拆成独立子项目 **`video_frame_tool/`**（src 布局、按功能分模块、自带回归脚本），
 参数与行为完全一致；详细说明见 `video_frame_tool/README.md`。
+
+```bash
+./run.sh                                       # 仓库根目录，一键启动（推荐）
+```
+
+`run.sh` 会自己定位 `video_frame_tool/src` 挂到 `PYTHONPATH` 再启动，**不需要先安装**；
+启动前顺带检查 Python / tkinter / ffmpeg 是否就绪，缺什么直接给修复命令。
+指定解释器：`PYTHON=/path/to/python3 ./run.sh`。
+
+也可以手工跑或装成命令：
 
 ```bash
 cd video_frame_tool

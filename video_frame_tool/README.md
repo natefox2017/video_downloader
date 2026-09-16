@@ -48,6 +48,9 @@ pip install -e .
 video-frame-tool
 ```
 
+上层仓库根目录还有一个 `../run.sh`：自动把 `src` 挂到 `PYTHONPATH` 并做环境自检
+（Python / tkinter / ffmpeg），无需安装即可启动。
+
 ## 开发约定
 
 - **回归检查**：`python3 tests/test_video_frame_tool.py`
