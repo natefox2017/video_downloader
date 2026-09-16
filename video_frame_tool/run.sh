@@ -106,4 +106,3 @@ if [ -n "${VFT_DRY_RUN:-}" ]; then
 fi
 
 exec env PYTHONPATH="$SRC${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m video_frame_tool "$@"
-exec env PYTHONPATH="$SRC${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m video_frame_tool "$@"
