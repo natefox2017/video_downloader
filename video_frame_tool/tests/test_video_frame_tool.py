@@ -6,6 +6,7 @@ import os
 import json
 import random
 import queue
+import sys
 from types import SimpleNamespace
 from pathlib import Path
 import subprocess
@@ -15,7 +16,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
+# 直接跑 `python3 tests/test_video_frame_tool.py` 时把 src 加进 sys.path；
+# 已经 `pip install -e .` 的环境不受影响。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+
 import video_frame_tool as tool
+from video_frame_tool import pip_track, pipeline, probe, small_pool
+from video_frame_tool.ui import window as ui_window
 
 
 class MockWidget(dict):
@@ -81,7 +88,7 @@ def check_small_cache():
         pool = [dict(path=src, dur=2, w=640, h=360)]
         started = threading.Event()
         calls = []
-        original = tool._build_small_copy
+        original = small_pool._build_small_copy
 
         def build(*args):
             """记录真实转码次数，并留出第二个任务进入缓存流程的时间。"""
@@ -90,7 +97,7 @@ def check_small_cache():
             time.sleep(0.1)
             return original(*args)
 
-        with patch.object(tool, '_build_small_copy', build):
+        with patch.object(small_pool, '_build_small_copy', build):
             with ThreadPoolExecutor(max_workers=2) as executor:
                 first = executor.submit(tool.prepare_small_pool, pool, 180,
                                         hw=tool.HWACCEL_OFF)
@@ -124,7 +131,7 @@ def check_small_cache():
             assert meta_path.stat().st_mtime_ns == stamp, '热缓存不应重写台账'
             stat = os.stat(src)
             os.utime(src, (stat.st_atime, stat.st_mtime + 2))
-            with patch.object(tool, '_build_small_copy', return_value=None):
+            with patch.object(small_pool, '_build_small_copy', return_value=None):
                 assert tool.prepare_small_pool(pool, 180) == {}, '生成失败不能返回失效旧副本'
                 assert tool.prepare_small_pool(pool, 180) == {}, '下次也不能认领失败旧副本'
             assert Path(a[src]).exists(), '失败不能删除长期缓存'
@@ -147,7 +154,7 @@ def check_incremental_scan():
             """扫描只需要元数据，记录真正需要探测的路径。"""
             calls.append(path)
             return 5, 640, 360
-        with patch.object(tool, 'probe_dur_size', probe):
+        with patch.object(small_pool, 'probe_dur_size', probe):
             pool = tool.scan_pip_pool(folder)
             assert len(calls) == 3
             (Path(folder) / 'd.mp4').write_bytes(b'new')
@@ -172,15 +179,16 @@ def check_image_probe_cache():
     with tempfile.TemporaryDirectory() as folder:
         image = Path(folder) / 'image.ppm'
         image.write_bytes(b'P6\n2 2\n255\n' + b'\xff\x00\x00' * 4)
-        original = tool._probe_json
-        with patch.object(tool, '_probe_json', wraps=original) as probe:
+        original = probe._probe_json
+        # 注意别用 probe 当 as 目标：会遮蔽上面 import 的 probe 子模块
+        with patch.object(probe, '_probe_json', wraps=original) as spy:
             with ThreadPoolExecutor(4) as executor:
                 sizes = list(executor.map(tool.probe_image_size, [str(image)] * 8))
             assert sizes == [(2, 2)] * 8
-            assert probe.call_count == 1, '同一产品图不应重复启动 ffprobe'
+            assert spy.call_count == 1, '同一产品图不应重复启动 ffprobe'
             image.write_bytes(b'P6\n4 2\n255\n' + b'\xff\x00\x00' * 8)
             assert tool.probe_image_size(str(image)) == (4, 2)
-            assert probe.call_count == 2
+            assert spy.call_count == 2
 
 
 def check_cancelled_batch():
@@ -192,14 +200,14 @@ def check_cancelled_batch():
         stopped.set()
         raise RuntimeError('terminated')
     with tempfile.TemporaryDirectory() as folder:
-        with patch.object(tool, '_encode_pip_batch', side_effect=cancel) as encode:
+        with patch.object(pip_track, '_encode_pip_batch', side_effect=cancel) as encode:
             try:
                 tool._encode_pip_batches([{}] * 8, folder, opts, None, lambda msg: None)
                 raise AssertionError('取消必须中止批次')
             except tool.CancelledError:
                 pass
             assert encode.call_count == 1
-        with patch.object(tool, 'probe_media', side_effect=AssertionError('不应探测')):
+        with patch.object(pipeline, 'probe_media', side_effect=AssertionError('不应探测')):
             try:
                 tool.process_one('unused', folder, opts, None, lambda msg: None)
                 raise AssertionError('取消必须中止单视频')
@@ -254,7 +262,7 @@ def check_ui_queue():
     # 预生成失败必须发事件，让按钮恢复可点
     app2 = FakeApp()
     app2._log_q = lambda msg: app2.msg_q.put(('log', msg))
-    with patch.object(tool, '_safe_probe', return_value=None):
+    with patch.object(ui_window, '_safe_probe', return_value=None):
         tool.App._small_worker(app2, 'unused', ['bad.mp4'], {})
     events = []
     while not app2.msg_q.empty():
@@ -482,7 +490,7 @@ def check_toggles():
         assert pixel(raw, 20, 250, 40)[1] > 230, '不加商品图不能把画中画挤掉'
 
         # B：概率 100 + 关画中画 → 商品图照常叠加，且不生成画中画轨
-        with patch.object(tool, 'build_pip_track',
+        with patch.object(pipeline, 'build_pip_track',
                           side_effect=AssertionError('画中画已关闭，不应调用')):
             raw = render(pip_dir=None, prod_chance=100)
         assert min(pixel(raw, 20, 160, 180)) > 230, '商品图应该照常叠加'
@@ -509,8 +517,8 @@ def check_warm_yields():
             Path(dst).write_bytes(b'x' * 5000)
             return True
         opts = dict(stop_event=stopped, pip_w=.24, pip_h=.2, rnd_zoom=1)
-        with patch.object(tool, 'scan_pip_pool', return_value=pool), \
-                patch.object(tool, '_build_small_copy', side_effect=build):
+        with patch.object(small_pool, 'scan_pip_pool', return_value=pool), \
+                patch.object(small_pool, '_build_small_copy', side_effect=build):
             tool._warm_small_pool_async(folder, dict(width=320, height=240), opts)
             try:
                 assert started.wait(2), '预热没有启动'
@@ -529,8 +537,8 @@ def check_compact_ui():
     app = FakeApp(_log=logs.append, _batch_total=3)
     app.stop_event.set()
     # 待运行任务通过 CancelledError 退出，不能让 as_completed 永远等不到通知。
-    with patch.object(tool, '_safe_probe', return_value=None), \
-            patch.object(tool, 'process_one', side_effect=tool.CancelledError):
+    with patch.object(ui_window, '_safe_probe', return_value=None), \
+            patch.object(ui_window, 'process_one', side_effect=tool.CancelledError):
         tool.App._worker(app, ['a.mp4', 'b.mp4', 'c.mp4'], 'unused', {'workers': 1})
     events = list(app.msg_q.queue)
     payload = next(value for kind, value in events if kind == 'done')
@@ -544,8 +552,8 @@ def check_compact_ui():
     with tempfile.TemporaryDirectory() as folder:
         app.pip_var = SimpleNamespace(get=lambda: folder)
         path = tool.small_dir_of(folder)
-        with patch.object(tool, 'open_folder', return_value=True) as opened, \
-                patch.object(tool.messagebox, 'showinfo') as info:
+        with patch.object(ui_window, 'open_folder', return_value=True) as opened, \
+                patch.object(ui_window.messagebox, 'showinfo') as info:
             tool.App._open_small(app)
             assert not os.path.exists(path) and path in info.call_args.args[1]
             Path(path).mkdir()
@@ -558,7 +566,7 @@ def check_compact_ui():
             """模拟有效的缓存产物。"""
             Path(dst).write_bytes(b'x' * 5000)
             return True
-        with patch.object(tool, '_build_small_copy', side_effect=build):
+        with patch.object(small_pool, '_build_small_copy', side_effect=build):
             tool.prepare_small_pool(pool, 480)
         progress = []
         tool.prepare_small_pool(pool, 480, progress_cb=lambda n, m: progress.append((n, m)))

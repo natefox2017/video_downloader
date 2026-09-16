@@ -66,5 +66,6 @@ jobs:
 
       - name: 校验 Python 语法
         run: |
-          python -m py_compile video_frame_tool.py
-          echo "video_frame_tool.py 编译通过"
+          set -e
+          python -m compileall -q video_frame_tool/src video_frame_tool/tests
+          echo "video_frame_tool 包与回归脚本编译通过"

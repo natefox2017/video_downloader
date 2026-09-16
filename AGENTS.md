@@ -11,9 +11,11 @@
 | 组件 | 入口 | 技术栈 | 启动/加载方式 |
 |---|---|---|---|
 | 抖音批量下载器 | `manifest.json` | Chrome MV3 + 原生 JS（无框架、无构建） | `chrome://extensions/` → 开发者模式 → 加载已解压的扩展 |
-| 视频批处理工具 | `video_frame_tool.py` | Python 3.8+ 标准库 + Tkinter + ffmpeg | `python3 video_frame_tool.py` |
+| 视频批处理工具 | `video_frame_tool/`（src 布局包，入口 `__main__.py`） | Python 3.8+ 标准库 + Tkinter + ffmpeg | `cd video_frame_tool && PYTHONPATH=src python3 -m video_frame_tool` |
 
-两个组件都是**单文件直改即生效**的形态：扩展没有打包步骤，Python 工具没有依赖安装步骤。**不要引入构建工具、打包器、npm 依赖或第三方 Python 包**（`imageio-ffmpeg` 是唯一例外，且仅在找不到系统 ffmpeg 时作为兜底被动态导入）。
+两个组件都是**直改即生效**的形态：扩展没有打包步骤，Python 工具没有依赖安装步骤
+（原单文件 `video_frame_tool.py` 已按功能拆分到 `video_frame_tool/src/video_frame_tool/`）。
+**不要引入构建工具、打包器、npm 依赖或第三方 Python 包**（`imageio-ffmpeg` 是唯一例外，且仅在找不到系统 ffmpeg 时作为兜底被动态导入）。
 
 ## 2. 开发与自检命令
 
@@ -28,9 +30,9 @@ node --check panel.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
 
 # Python 工具：编译检查（不会真正启动 GUI）
-python3 -m py_compile video_frame_tool.py
+python3 -m compileall -q video_frame_tool/src video_frame_tool/tests
 # 视频回归：需要 ffmpeg/ffprobe，只使用临时素材
-python3 test_video_frame_tool.py
+python3 video_frame_tool/tests/test_video_frame_tool.py
 ```
 
 功能验证建议（两个组件都没有自动化测试框架，Python 已有标准库回归脚本）：
@@ -59,9 +61,9 @@ python3 test_video_frame_tool.py
 
 1. **零硬编码路径。**
    代码里**不允许出现任何具体用户路径**（如 `/Users/xxx/...`、`C:\Users\...`）。所有路径来自用户选择，并持久化到 `settings.json`。新增可配置项请走 `DEFAULT_SETTINGS` 结构 + `load_settings()` / `save_settings()`。
-2. **平台差异只允许写在文件开头的「零、平台适配层」。**
+2. **平台差异只允许写在 `platform_compat.py`（原「零、平台适配层」）。**
    其它任何位置出现 `if sys.platform == ...` 或 `os.name == "nt"` 都算违规。平台函数**必须支持显式传 `platform=` 参数**，以便在不换系统的前提下验证三个分支。
-3. **性能约束是硬要求**（详见 `video_frame_tool.py` 模块 docstring 与 README「性能设计」）：
+3. **性能约束是硬要求**（详见 `video_frame_tool/README.md` 的「设计说明」与各子模块 docstring）：
    - 素材池探测结果必须走缓存（内存 + `.pip_cache.json` + 目录指纹），目录变化只探测新增/修改文件，完全命中不重写台账；v4 使用纳秒时间指纹，记录结构变化时同步升 `_POOL_CACHE_V`；
    - 画中画素材必须优先用 `prepare_small_pool()` 生成的加速副本，不要直接拿原素材去编码（理由见 README 性能实测）；
    - 并发处理时必须给每个 ffmpeg 分配线程配额 `max(1, CPU核数 // 并发数)`，不得放任 N 个编码器抢满核心；
@@ -152,7 +154,7 @@ python3 test_video_frame_tool.py
 | **硬解不是"开了就好"，要分阶段** | 硬解只在"解码 1080p/4K 原片"时占便宜。素材换成 480p 副本后，画中画批次开硬解**慢 60%**（0.65→1.04 秒），主合成**完全无差别**（5.8 秒 vs 5.8 秒）；只有生成副本那一步快 26%。所以 `hw_decode_args(mode, stage)` 带 stage 参数，`HW_AUTO_STAGES` 只含 COPY / PIP_RAW。**改这个元组前先重跑 README「硬件加速实测」那张表** |
 | **提速只调 preset，不要碰编码器和滤镜链** | 主合成 95% 的时间在编码（只解码 0.34s vs 完整 6.7s）。实测 preset 每降一档约 **1.4 倍且并发下不打折**：`veryfast/CRF18` → `superfast/CRF20` = 1.57x 且体积持平。而硬编在 5 并发下只有 **1.06x**（苹果媒体引擎共享）；滤镜链全关掉、留下冗余的 `scale`+`fps` 都**零收益**（见 README「编码档位实测」）。另注：界面旧档位「均衡/高质量」实测比 `veryfast` 慢 2.9 倍以上，所以 `PRESET_MAP` 的旧名字已整体上移一档 |
 | **单次计时的结论可能是假的，一律跑 3 轮取中位数** | 同一个配置在 45 秒片段上单轮测出"硬解快 1.4 倍"，换时长跑 3 轮中位数却变成 0.95~0.98x。**性能结论必须做重复测量**，否则会得出完全相反的优化方向（本次差点把默认值设反） |
-| **画中画素材色彩空间混用会让成片「两分钟后画面卡死、只剩声音」** | 素材池里混着 **bt709 / bt2020nc+arib-std-b67(HLG) / bt470bg(601)** 三种色彩空间（本机 402 个素材里约 135 个是 HLG）。把它们拼到同一条画中画轨后，ffmpeg 在每个色彩切换点都会 `Reconfiguring filter graph because video parameters changed`，主合成帧时间戳错乱、成片视频轨只剩源的一半（ffprobe：video 161.97s/4853 帧 vs audio 323.22s/13920 帧），日志 `drop=3643~6296`。**现象**：播放到约 2 分钟画面定格、声音继续、音画错位；5 并发 100% 复现，单条干净的 pip 不出现。**修法**：`_clip_filter()` 的每个 `scale` 都要带 `:out_color_matrix=bt709`（**真正转像素矩阵**，不是只改标记），链末再 `setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709` 统一标记；`_encode_pip_batch()` 同时写容器级 `-colorspace/-color_primaries/-color_trc bt709`。**只加 `setparams` 不加 `out_color_matrix` 会让 601 素材偏色**——回归测试 `check_output_pixels()` 的绿画中画像素断言会直接失败。改滤镜链后必跑 `python3 test_video_frame_tool.py` |
+| **画中画素材色彩空间混用会让成片「两分钟后画面卡死、只剩声音」** | 素材池里混着 **bt709 / bt2020nc+arib-std-b67(HLG) / bt470bg(601)** 三种色彩空间（本机 402 个素材里约 135 个是 HLG）。把它们拼到同一条画中画轨后，ffmpeg 在每个色彩切换点都会 `Reconfiguring filter graph because video parameters changed`，主合成帧时间戳错乱、成片视频轨只剩源的一半（ffprobe：video 161.97s/4853 帧 vs audio 323.22s/13920 帧），日志 `drop=3643~6296`。**现象**：播放到约 2 分钟画面定格、声音继续、音画错位；5 并发 100% 复现，单条干净的 pip 不出现。**修法**：`_clip_filter()` 的每个 `scale` 都要带 `:out_color_matrix=bt709`（**真正转像素矩阵**，不是只改标记），链末再 `setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709` 统一标记；`_encode_pip_batch()` 同时写容器级 `-colorspace/-color_primaries/-color_trc bt709`。**只加 `setparams` 不加 `out_color_matrix` 会让 601 素材偏色**——回归测试 `check_output_pixels()` 的绿画中画像素断言会直接失败。改滤镜链后必跑 `python3 video_frame_tool/tests/test_video_frame_tool.py` |
 | **画中画色彩不统一是「静默丢帧」，不看 ffprobe 帧数查不出来** | 上面那个 bug 的产物文件大小、时长、音轨都正常，播放器也不报错，只有**视频轨帧数腰斩**。排查手法：`ffprobe -v error -select_streams v:0 -show_entries stream=duration,nb_frames -of csv` 与音频轨对比，两者差一倍即命中。别只看「文件能不能播」 |
 
 ## 5. 代码风格约定
@@ -161,7 +163,10 @@ python3 test_video_frame_tool.py
 - **命名**：JS 用 `camelCase` 函数 / `SCREAMING_SNAKE_CASE` 常量；Python 用 `snake_case` / `SCREAMING_SNAKE_CASE`，模块内 `_private` 前缀表示内部函数。
 - **不要引入 emoji 到代码与文档**（扩展日志前缀 `[抖晓晓]` 是既有文案，保留）。
 - **注释解释「为什么」，不复述「做了什么」**；涉及性能与时序的数字（阈值、间隔、上限）要在注释里写清来源或实测依据。
-- 改动滤镜链 / 并发策略 / 缓存策略时，**同步更新**：`video_frame_tool.py` 顶部 docstring、`README.md` 对应小节、本文件的相关条目。三处不一致即视为未完成。
+- 改动滤镜链 / 并发策略 / 缓存策略时，**同步更新**：`video_frame_tool/README.md` 的设计说明、受影响的子模块 docstring、本文件的相关条目。三处不一致即视为未完成。
+- **单元测试 patch 要打到「调用点所在的子模块」**：子模块之间是 `from .x import name` 复制引用，
+  `patch.object(small_pool, '_build_small_copy')` 有效，patch 包根（`video_frame_tool._build_small_copy`）**不生效**。
+  新增跨模块依赖时，顺手在测试里确认 patch 目标仍指在调用点上。
 
 ## 6. 提交规范
 
@@ -175,5 +180,5 @@ python3 test_video_frame_tool.py
 
 1. **命名不统一**：`manifest.json` 的 `name` 是「抖抖抖 抖音视频下载器 (批量下载)」，而运行时日志与面板标题用「抖晓晓」。统一命名会改变用户在 Chrome 扩展页看到的名字，属于产品决策，**需先与维护者确认**。
 2. **`manifest.json` 的 `description` 仍是早期情绪化文案**，若要上架 Chrome 商店需重写。
-3. **回归检查尚未接入 CI**：`test_video_frame_tool.py` 已覆盖缓存、扫描、取消、消息合并和基本滤镜链像素校验，CI 仍只做语法检查。
+3. **回归检查尚未接入 CI**：`video_frame_tool/tests/test_video_frame_tool.py` 已覆盖缓存、扫描、取消、消息合并和基本滤镜链像素校验，CI 仍只做语法检查。
 4. **仓库尚未声明开源许可证**：在维护者决定之前不要添加 `LICENSE` 文件。

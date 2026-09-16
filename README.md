@@ -21,8 +21,8 @@
 ├── injected.js             # 注入页面主世界：读取播放器数据并上报
 ├── panel.html/.css/.js     # iframe 面板界面（原生 JS，无框架）
 ├── images/                 # 扩展图标 16/32/128
-├── video_frame_tool.py     # Python GUI 视频批处理工具（纯标准库 + ffmpeg）
-├── logo.png                # Python 工具的品牌图（可选；删掉就用脚本内嵌的那份）
+├── video_frame_tool/       # Python GUI 视频批处理工具（独立子项目，自己一个 README）
+├── logo.png                # Python 工具的品牌图（可选；删掉就用包里内嵌的那份）
 ├── .github/workflows/ci.yml# CI：JS 语法 + manifest 校验 + Python 编译检查
 ├── AGENTS.md               # 给 AI 编码助手的项目须知（架构约束、易踩坑点）
 └── README.md
@@ -148,8 +148,14 @@
 
 ## 运行
 
+Python 工具已从仓库根的单文件拆成独立子项目 **`video_frame_tool/`**（src 布局、按功能分模块、自带回归脚本），
+参数与行为完全一致；详细说明见 `video_frame_tool/README.md`。
+
 ```bash
-python3 video_frame_tool.py
+cd video_frame_tool
+PYTHONPATH=src python3 -m video_frame_tool     # 免安装，直接跑
+# 或者装成命令：
+pip install -e . && video-frame-tool
 ```
 
 Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
@@ -212,7 +218,7 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
 
 每秒刷新一次，接口都是各平台原生廉价调用（macOS mach API / Linux procfs / Windows Win32 API），**不依赖 psutil 等第三方库**，也不用子进程。每台机器能取到什么就显示什么，取不到的项显示 `—`（例如首次采样还不足以算出 CPU 差值）。
 
-界面**内容区不放任何 logo 或标题文案**（参数区直接从「素材路径」开始），程序图标只出现在窗口标题栏 / 任务栏 / Dock：图标内嵌在脚本里（base64 PNG），**不依赖任何外部图片文件**。想换成自己的品牌图：把 `logo.png` 放到 `video_frame_tool.py` 同目录或用户配置目录即可，程序会优先采用它。
+界面**内容区不放任何 logo 或标题文案**（参数区直接从「素材路径」开始），程序图标只出现在窗口标题栏 / 任务栏 / Dock：图标内嵌在包里（base64 PNG），**不依赖任何外部图片文件**。想换成自己的品牌图：把 `logo.png` 放到 `video_frame_tool/` 项目根目录、包目录 `src/video_frame_tool/`、或用户配置目录任一处即可，程序会优先采用它。
 
 > **Tk 8.5 兼容**：macOS 自带的 `/usr/bin/python3` 绑的是 Tk 8.5，它既不认 PNG 也不认 base64 形式的 PPM，只认 PPM 文件。程序检测到这种情况会自动用**纯标准库**把内嵌 PNG 解出来、缩到目标尺寸、落盘成 PPM 再加载（自定义 `logo.png` 同样走这条路），因此在老 Tk 上 logo 也能正常显示。Tk 8.6+ 走原生 PNG 路径。
 
@@ -233,7 +239,7 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
 | macOS | `~/Library/Application Support/video_frame_tool/settings.json` |
 | Linux | `$XDG_CONFIG_HOME/video_frame_tool/settings.json`（默认 `~/.config/…`） |
 
-所有系统差异集中在文件开头的「零、平台适配层」，其它代码只调用该层函数：
+所有系统差异集中在 `video_frame_tool/src/video_frame_tool/platform_compat.py`（原单文件里的「零、平台适配层」），其它代码只调用该层函数：
 
 | 差异点 | Windows | macOS | Linux |
 |---|---|---|---|
@@ -405,7 +411,7 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
 这是共享素材的冷缓存准备阶段数据，不代表完整视频端到端提升。
 缓存全部命中时不会获得上述转码收益；同目录不重叠的冷缓存请求会依次进入，
 每批内部仍使用既有线程池。原有滤镜、编码画质及缓存规格版本保持不变。
-运行 `python3 test_video_frame_tool.py` 可检查真实转码下的并发去重、缓存复用、
+运行 `python3 video_frame_tool/tests/test_video_frame_tool.py` 可检查真实转码下的并发去重、缓存复用、
 源素材变更后重建、停止，以及副本帧数、时长、尺寸和静音。
 
 ### 整体检查后的实测（2026-09-16，三轮中位数）
@@ -427,7 +433,7 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
 减到 4 或 2，耗时由约 7.67 秒变成 9.23 / 12.69 秒，因此维持既有编码配额、
 画质、滤镜和硬件加速策略。
 
-`python3 test_video_frame_tool.py` 覆盖缓存并发/升级/失败回退、增量扫描、
+`video_frame_tool/tests/test_video_frame_tool.py` 覆盖缓存并发/升级/失败回退、增量扫描、
 同图并发探测、共享列表隔离、子集编号、等待锁时停止、取消后不重试、消息合并、
 预生成失败恢复，以及真实合成的帧数、时长、尺寸、音轨和叠加像素。
 另用优化前后相同输入对照，解码后的逐帧像素完全一致。
@@ -493,18 +499,20 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
 
 ## 开发与贡献
 
-- **无构建步骤**：扩展改完代码在 `chrome://extensions/` 点刷新；Python 工具直接跑脚本。
+- **无构建步骤**：扩展改完代码在 `chrome://extensions/` 点刷新；Python 工具是独立子项目
+  `video_frame_tool/`，`PYTHONPATH=src python3 -m video_frame_tool` 直接跑。
 - **提交前自检**（CI 也在跑同样的检查）：
   ```bash
   node --check background.js && node --check content.js \
     && node --check injected.js && node --check panel.js
   node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
-  python3 -m py_compile video_frame_tool.py
+  python3 -m compileall -q video_frame_tool/src video_frame_tool/tests
+  python3 video_frame_tool/tests/test_video_frame_tool.py      # 回归（需要 ffmpeg）
   ```
 - 改到界面/图标相关代码时，**两个 Tk 版本都要验**（macOS 系统 Tk 8.5 与 Homebrew/托管 Python 的 Tk 8.6+）：
   ```bash
   # 打印 logo 来源与尺寸：Tk 8.5 应显示「（PPM 回退）」，Tk 8.6+ 显示原生路径
-  /usr/bin/python3 -c "import tkinter as tk,sys;sys.path.insert(0,'.');import video_frame_tool as m;tk.Tk().withdraw();print(tk.TkVersion, m.load_logo(64))"
+  PYTHONPATH=video_frame_tool/src /usr/bin/python3 -c "import tkinter as tk; import video_frame_tool as m; tk.Tk().withdraw(); print(tk.TkVersion, m.load_logo(64))"
   ```
 - 改动较大的功能建议在 commit message 里说明「改了什么 + 为什么」，涉及性能约束（见上文）的改动请附实测数据。
 - 面向 AI 编码助手的项目约定、架构不变量与易踩坑点见 [AGENTS.md](AGENTS.md)。
