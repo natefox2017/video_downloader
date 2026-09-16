@@ -193,6 +193,8 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
 
 界面顶部的 logo 内嵌在脚本里（base64 PNG），**不依赖任何外部图片文件**。想换成自己的品牌图：把 `logo.png` 放到 `video_frame_tool.py` 同目录或用户配置目录即可，程序会优先采用它。
 
+> **Tk 8.5 兼容**：macOS 自带的 `/usr/bin/python3` 绑的是 Tk 8.5，它既不认 PNG 也不认 base64 形式的 PPM，只认 PPM 文件。程序检测到这种情况会自动用**纯标准库**把内嵌 PNG 解出来、缩到目标尺寸、落盘成 PPM 再加载（自定义 `logo.png` 同样走这条路），因此在老 Tk 上 logo 也能正常显示。Tk 8.6+ 走原生 PNG 路径。
+
 ## 输出
 
 - 输出目录：`<所选视频目录>/out/`
@@ -291,6 +293,11 @@ Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。
     && node --check injected.js && node --check panel.js
   node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
   python3 -m py_compile video_frame_tool.py
+  ```
+- 改到界面/图标相关代码时，**两个 Tk 版本都要验**（macOS 系统 Tk 8.5 与 Homebrew/托管 Python 的 Tk 8.6+）：
+  ```bash
+  # 打印 logo 来源与尺寸：Tk 8.5 应显示「（PPM 回退）」，Tk 8.6+ 显示原生路径
+  /usr/bin/python3 -c "import tkinter as tk,sys;sys.path.insert(0,'.');import video_frame_tool as m;tk.Tk().withdraw();print(tk.TkVersion, m.load_logo(64))"
   ```
 - 改动较大的功能建议在 commit message 里说明「改了什么 + 为什么」，涉及性能约束（见上文）的改动请附实测数据。
 - 面向 AI 编码助手的项目约定、架构不变量与易踩坑点见 [AGENTS.md](AGENTS.md)。

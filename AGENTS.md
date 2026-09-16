@@ -81,6 +81,8 @@ python3 -m py_compile video_frame_tool.py
 | **Tk 关闭时序** | `after()` 定时器要在 `WM_DELETE_WINDOW` 里 `after_cancel`，否则关窗时报 `invalid command name ..._poll_queue` |
 | **画中画源尺寸/比例与目标不一致** | 必须显式处理：`force_original_aspect_ratio` + 裁剪填满或加黑边，并按偶数对齐（h264 要求宽高为偶数）。实测踩坑：等比放大到"覆盖目标"后忘了 `crop`，3840×2160 素材填 258×384 得 683×384 奇数宽，x264 直接 `Invalid argument`，整条视频丢掉画中画。**crop_fill 分支必须无条件补 `crop=W:H`**，不要只在 `zoom > 1` 时补 |
 | **别把「批量编码」当提速卖点** | 实测 400 秒成片 133 段：进程数 133 → 17，墙钟时间持平（64.8s vs 65.7s）——该阶段瓶颈在素材解码。批处理的收益是进程数少一个数量级、CPU 峰值平稳。提速大头是线程配额。改这条前先跑基准，别凭直觉写「性能提升 N 倍」 |
+| **macOS 自带 python3 的 Tk 是 8.5，读不了 PNG** | 实测 `/usr/bin/python3`(3.9.6/Tk 8.5)：`PhotoImage(data=png_b64)`、base64 PPM 全部报 `couldn't recognize image data`，**Tk 8.5 只认 PPM 文件**。所以 `load_logo()` 有三级回退：自定义 logo.png → 内嵌 PNG → 纯标准库解 PNG 转 PPM 临时文件。删掉 `_png_decode` / `_png_to_ppm_file` 会让 macOS 用户看不到 logo（现象是"改了但没变化"），改动前先用 `/usr/bin/python3` 验证一次 |
+| **确认用到的是哪个解释器** | 本机 `python3` 可能指向托管 Python（Tk 9.0），也可能指向 `/usr/bin/python3`（Tk 8.5），两者 logo 加载路径完全不同。跨版本验证命令见 README「运行状态监控」小节 |
 | **`.DS_Store` / `__pycache__` / `.workbuddy/` 不要提交** | 已在 `.gitignore` 排除。`.workbuddy/` 存本机记忆与原始插件备份，含本地绝对路径，**保留在本地但永不入库** |
 
 ## 5. 代码风格约定

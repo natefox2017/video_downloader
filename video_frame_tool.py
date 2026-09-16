@@ -81,6 +81,8 @@ import os
 import re
 import sys
 import json
+import zlib           # 程序图标回退用：纯标准库解内嵌 PNG（见"一·七"）
+import struct         # 同上：解析 PNG 分块头
 import ctypes          # 系统资源监控用：调用各平台原生 API（macOS mach / Windows Win32）
 import ntpath          # 用于生成规范的 Windows 路径（跨平台可用）
 import queue
@@ -790,9 +792,18 @@ class SystemMonitor:
 #     1) video_frame_tool.py 所在目录
 #     2) 用户配置目录（位置见"零、平台适配层"的 user_config_dir）
 # 程序启动时优先用你的图片，找不到才用内嵌图标。建议正方形、256x256 以上。
+#
+# ⚠ 为什么下面要自己解 PNG（实测踩过的坑，别删）：
+#   macOS 自带的 /usr/bin/python3 绑的是 **Tk 8.5**，它既不认 PNG
+#   （`PhotoImage(data=png_base64)` → "couldn't recognize image data"），
+#   也不认 base64 形式的 PPM。Tk 8.5 唯一能读的位图格式是**PPM 文件**。
+#   于是这里用纯标准库把内嵌 PNG 解出来、缩到目标尺寸、落盘成 PPM 再加载。
+#   Tk 8.6+ 走正常 PNG 路径，只在 8.5 上才触发这条回退。
 # ============================================================================
 
 LOGO_FILE_NAME = "logo.png"          # 自定义 logo 的文件名
+_LOGO_PPM_FILES = {}                 # size -> 已经转好的 PPM 临时文件路径
+_LOGO_EMBEDDED_CACHE = []            # 内嵌 PNG 解码后的字节（延迟解，避免 import 期开销）
 LOGO_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAASpElEQVR42u3d2XNb53nH8XOhW13oD6hmolveuEnbsFvcyqZt"
     "bdC+UgskWxIUJ3HTxpxaTXyDZppJPK3iygunw0mCjDupxkvHcRunZVo3XVJN3TqjqYPWnpYXleqFiwRSFkW4xOnzAjwkQByA"
@@ -865,6 +876,109 @@ LOGO_PNG_B64 = (
 )
 
 
+def _logo_embedded_png():
+    """内嵌 logo 的 PNG 原始字节（解一次就缓存）。"""
+    import base64 as _b64
+    if not _LOGO_EMBEDDED_CACHE:
+        _LOGO_EMBEDDED_CACHE.append(_b64.b64decode(LOGO_PNG_B64))
+    return _LOGO_EMBEDDED_CACHE[0]
+
+
+def _png_decode(png_bytes):
+    """
+    纯标准库解 8 位 PNG，返回 (宽, 高, 通道数, 像素字节)。
+
+    只服务内嵌 logo：macOS 自带 python3 的 Tk 是 8.5，读不了 PNG，必须自己解。
+    支持颜色类型 0/2/4/6（灰度 / RGB / 灰度+A / RGBA）与全部 5 种行滤波方式。
+    调色板（类型 3）与 16 位深不支持——内嵌图是我们自己生成的，不会用到。
+    """
+    if png_bytes[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("不是 PNG 数据")
+    pos, idat, w, h, ct = 8, bytearray(), 0, 0, 0
+    while pos + 8 <= len(png_bytes):
+        (ln,) = struct.unpack(">I", png_bytes[pos:pos + 4])
+        typ = png_bytes[pos + 4:pos + 8]
+        body = png_bytes[pos + 8:pos + 8 + ln]
+        if typ == b"IHDR":
+            w, h, bd, ct = struct.unpack(">IIBB", body[:10])
+            if bd != 8:
+                raise ValueError("只支持 8 位 PNG")
+        elif typ == b"IDAT":
+            idat += body
+        elif typ == b"IEND":
+            break
+        pos += 12 + ln
+    ch = {0: 1, 2: 3, 4: 2, 6: 4}.get(ct)
+    if not ch:
+        raise ValueError("不支持的颜色类型 %s" % ct)
+
+    raw = zlib.decompress(bytes(idat))
+    stride, p = w * ch, 0
+    prev = bytearray(stride)
+    out = bytearray()
+    for _ in range(h):
+        f = raw[p]
+        p += 1
+        line = bytearray(raw[p:p + stride])
+        p += stride
+        if f == 1:                                   # Sub
+            for i in range(ch, stride):
+                line[i] = (line[i] + line[i - ch]) & 255
+        elif f == 2:                                 # Up
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif f == 3:                                 # Average
+            for i in range(stride):
+                a = line[i - ch] if i >= ch else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 255
+        elif f == 4:                                 # Paeth
+            for i in range(stride):
+                a = line[i - ch] if i >= ch else 0
+                c = prev[i - ch] if i >= ch else 0
+                b = prev[i]
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 255
+        elif f != 0:
+            raise ValueError("不支持的行滤波 %d" % f)
+        out += line
+        prev = line
+    return w, h, ch, bytes(out)
+
+
+def _png_to_ppm_file(png_bytes, size):
+    """
+    把 PNG 缩小到 size×size 并落盘为 PPM（P6），返回文件路径。
+
+    Tk 8.5 只认 PPM 文件，这是老 Tk 上唯一能让 logo 显示出来的路子。
+    缩放用最近邻抽样（图标是几何色块，效果足够，且零依赖）。
+    """
+    w, h, ch, px = _png_decode(png_bytes)
+    if size > w:                                     # 目标比原图大就不放大，避免无谓糊图
+        size = w
+    step = max(1, w // size)
+    vstep = max(1, h // size)
+    rows = []
+    for y in range(0, h, vstep):
+        row = bytearray()
+        base = y * w
+        for x in range(0, w, step):
+            o = (base + x) * ch
+            if ch >= 3:
+                row += px[o:o + 3]
+            else:
+                row += bytes((px[o],)) * 3
+        rows.append(bytes(row))
+    rows = rows[:size]
+
+    path = os.path.join(tempfile.gettempdir(), "video_frame_tool_logo_%d.ppm" % size)
+    with open(path, "wb") as fh:
+        fh.write(b"P6\n%d %d\n255\n" % (size, len(rows)))
+        for r in rows:
+            fh.write(r)
+    return path
+
+
 def _logo_search_paths():
     """自定义 logo 的查找位置（按优先级）"""
     return [
@@ -873,46 +987,58 @@ def _logo_search_paths():
     ]
 
 
+def _logo_shrink(img, size):
+    """Tk 只能整数倍缩图，取最接近的倍数把 img 缩到约 size 像素。"""
+    factor = max(1, int(round(max(img.width(), img.height()) / float(size))))
+    return img.subsample(factor, factor) if factor > 1 else img
+
+
+def _logo_load_via_ppm(png_bytes, size):
+    """
+    老 Tk（8.5）回退路径：PNG → PPM 临时文件 → PhotoImage。
+    转好的 PPM 按尺寸缓存，避免窗口图标与标题图标各转一次。
+    """
+    path = _LOGO_PPM_FILES.get(size)
+    if not path or not os.path.isfile(path):
+        path = _png_to_ppm_file(png_bytes, size)
+        _LOGO_PPM_FILES[size] = path
+    return tk.PhotoImage(file=path)
+
+
 def load_logo(size=64):
     """
     载入 logo 图片，返回 (PhotoImage 或 None, 来源说明)。
 
     优先级：脚本同目录的 logo.png → 配置目录的 logo.png → 内嵌图标。
+    每一条都先试 Tk 原生 PNG 加载，失败再走 PPM 回退（Tk 8.5 场景）。
     必须在创建 Tk 根窗口之后调用（PhotoImage 依赖 Tk 环境）。
     任何失败都只返回 (None, 原因)，不抛异常、不影响主流程。
     """
-    import base64 as _b64
-
     # ---- 1) 用户自定义图片 ----
     for path in _logo_search_paths():
         if not os.path.isfile(path):
             continue
         try:
-            img = tk.PhotoImage(file=path)
-            factor = max(1, int(round(max(img.width(), img.height()) / float(size))))
-            if factor > 1:                       # Tk 只能整数倍缩图，取最接近的倍数
-                img = img.subsample(factor, factor)
-            return img, path
+            return _logo_shrink(tk.PhotoImage(file=path), size), path
         except Exception:
-            continue                             # 用户图片读不了就继续看下一个
+            pass
+        try:                                          # 老 Tk 读不了 PNG 文件 → 自己转 PPM
+            with open(path, "rb") as fh:
+                return _logo_load_via_ppm(fh.read(), size), path + "（PPM 回退）"
+        except Exception:
+            continue                                  # 用户图片读不了就继续看下一个
 
-    # ---- 2) 内嵌图标 ----
+    # ---- 2) 内嵌图标：Tk 8.6+ 直接吃 base64 PNG ----
     try:
-        img = tk.PhotoImage(data=LOGO_PNG_B64)
+        return _logo_shrink(tk.PhotoImage(data=LOGO_PNG_B64), size), "内嵌图标"
     except Exception:
-        # 极少数老版本 Tk 不认 base64 PNG → 落盘到临时文件再读一次
-        try:
-            tmp = os.path.join(tempfile.gettempdir(), "video_frame_tool_logo.png")
-            with open(tmp, "wb") as fh:
-                fh.write(_b64.b64decode(LOGO_PNG_B64))
-            img = tk.PhotoImage(file=tmp)
-        except Exception as e:
-            return None, f"内嵌图标不可用（{e}）"
+        pass
 
-    factor = max(1, int(round(img.width() / float(size))))
-    if factor > 1:
-        img = img.subsample(factor, factor)
-    return img, "内嵌图标"
+    # ---- 3) 内嵌图标：PPM 回退（Tk 8.5）----
+    try:
+        return _logo_load_via_ppm(_logo_embedded_png(), size), "内嵌图标（PPM 回退）"
+    except Exception as e:
+        return None, "内嵌图标不可用（%s）" % e
 
 
 # ============================================================================
