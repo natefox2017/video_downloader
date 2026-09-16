@@ -1636,7 +1636,11 @@ def _concat_pip_batches(files, dst, registry):
     listfile = os.path.join(os.path.dirname(files[0]), "list.txt")
     with open(listfile, "w", encoding="utf-8") as fh:
         for path in files:
-            fh.write("file '%s'\n" % path.replace("'", "'\\''"))
+            # 路径统一写成正斜杠：concat demuxer 把反斜杠当转义符，
+            # Windows 下的 "C:\...\b000.mp4" 会被解析坏掉（报 No such file）。
+            # ffmpeg 在 Windows 上也接受正斜杠，所以两种系统都安全。
+            safe = path.replace("\\", "/").replace("'", "'\\''")
+            fh.write("file '%s'\n" % safe)
     _run([FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
           "-f", "concat", "-safe", "0", "-i", listfile, "-an", "-c", "copy", dst], registry)
     return dst
@@ -1784,6 +1788,34 @@ def build_command(src, opts, info, dst, pip=None):
     return cmd, target_w, target_h
 
 
+def _clamp_prod_start(opts, info, say=None):
+    """
+    把「产品图起始帧」夹到视频真实帧数范围内，返回一份**新的** opts（不改调用方那份）。
+
+    背景：起始帧设成 60，而某个视频只有 30 帧（1 秒）时，overlay 的 enable 条件
+    永远不成立，产品图整条都不会出现，用户会以为功能坏了。这里退到最后一帧并如实说明。
+
+    :param opts: 本批共用的选项字典（多线程共享，**绝不能就地改**）
+    :param info: probe_media 的结果
+    :return: 原字典（无需调整）或调整后的副本
+    """
+    start = max(0, int(opts.get("prod_start", PRODUCT_START_FRAME)))
+    fps = float(info.get("fps") or 0)
+    dur = float(info.get("duration") or 0)
+    frames = int(dur * fps) if fps > 0 and dur > 0 else 0
+    if frames and start >= frames:
+        fixed = max(0, frames - 1)
+        if say:
+            say(f"说明：产品图起始帧 {start} 超出这个视频的总帧数（{frames} 帧），"
+                f"已从第 {fixed} 帧起显示")
+        start = fixed
+    if start == opts.get("prod_start"):
+        return opts
+    new = dict(opts)
+    new["prod_start"] = start
+    return new
+
+
 def process_one(src, out_dir, opts, registry, log, tag=""):
     """
     处理单个视频：准备画中画轨 → 一次合成出片 → 输出到 out_dir。
@@ -1801,12 +1833,17 @@ def process_one(src, out_dir, opts, registry, log, tag=""):
     base, ext = os.path.splitext(os.path.basename(src))
     out_ext = ext.lower() if ext.lower() in KEEP_EXT else ".mp4"
     dst = os.path.join(out_dir, base + out_ext)
+    # 防御：输出路径与源文件完全相同（例如有人把输出目录选成了源目录）时，
+    # ffmpeg 会直接报"same as Input"并失败。这里加后缀避开，保证永远有输出。
+    if os.path.abspath(dst) == os.path.abspath(src):
+        dst = os.path.join(out_dir, base + "_已处理" + out_ext)
 
     # 本文件的所有日志都带文件名前缀，便于在并发日志里对号入座
     def say(msg):
         log(f"{tag} {msg}" if tag else msg)
 
     say(f"开始处理（时长 {fmt_duration(info['duration'])}）")
+    opts = _clamp_prod_start(opts, info, say)      # 起始帧超出视频长度时自动退到最后一帧
 
     tmpdir, pip = None, None
     try:
@@ -1838,12 +1875,14 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("短视频批处理工具 · 换首帧 / 贴产品图 / 画中画")
-        self.geometry("920x900")
-        self.minsize(880, 800)
+        # 标题栏只留工具名：界面里不再放标题行（用户要求去掉，见 _build_ui 说明）
+        self.title("短视频批处理工具")
+        self.geometry("920x820")
+        self.minsize(880, 700)
 
-        # ---- 窗口图标（任务栏 / 标题栏）----
+        # ---- 窗口图标（任务栏 / 标题栏 / Dock）----
         # 用内嵌 logo，不依赖外部文件；自定义 logo.png 会被优先采用，见 load_logo()
+        # 注意：这里只设置窗口图标，界面内容区不显示任何 logo（用户明确要求去掉标题行）
         self.icon_image = None
         try:
             icon, _src = load_logo(256)
@@ -1930,6 +1969,12 @@ class App(tk.Tk):
             workers = int(float(str(self.workers_var.get())))
         except Exception:
             workers = DEFAULT_WORKERS
+        # 输入框被清空/填了非数字时 IntVar.get() 会抛 TclError。
+        # 关窗时也要走这里，一旦抛出会导致窗口关不掉，所以必须兜住。
+        try:
+            prod_start = int(float(str(self.prod_start_var.get())))
+        except Exception:
+            prod_start = PRODUCT_START_FRAME
         return {
             "version": SETTINGS_VERSION,
             "paths": {
@@ -1953,7 +1998,7 @@ class App(tk.Tk):
             "run": {
                 "workers": workers,
                 "preset": self.preset_var.get(),
-                "prod_start": int(self.prod_start_var.get() or 0),   # 产品图起始帧
+                "prod_start": prod_start,            # 产品图起始帧
             },
         }
 
@@ -1982,23 +2027,9 @@ class App(tk.Tk):
         root.pack(fill="both", expand=True, padx=12, pady=10)
         root.columnconfigure(0, weight=1)
 
-        # ---------- 0. 顶部：logo + 标题 ----------
-        f_head = ttk.Frame(root)
-        f_head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        head_img, head_src = load_logo(64)
-        if head_img:
-            self.head_image = head_img          # 必须留引用，否则图片会被回收、显示空白
-            ttk.Label(f_head, image=head_img).pack(side="left", padx=(0, 12))
-        f_title = ttk.Frame(f_head)
-        f_title.pack(side="left")
-        ttk.Label(f_title, text="短视频批处理工具",
-                  font=("", 15, "bold")).pack(anchor="w")
-        ttk.Label(f_title, text="换首帧 · 贴产品图 · 右上角画中画",
-                  foreground="#666").pack(anchor="w")
-
-        # ---------- 1. 路径区 ----------
+        # ---------- 0. 路径区 ----------
         f_path = ttk.LabelFrame(root, text=" 素材路径 ")
-        f_path.grid(row=1, column=0, sticky="ew")
+        f_path.grid(row=0, column=0, sticky="ew")
         f_path.columnconfigure(1, weight=1)
 
         def path_row(r, label, var, cb):
@@ -2011,9 +2042,9 @@ class App(tk.Tk):
         path_row(2, "视频目录", self.dir_var, lambda: self._pick_dir(None, "选择视频目录"))
         path_row(3, "小视频目录", self.pip_var, lambda: self._pick_dir(self.pip_var, "选择画中画小视频目录"))
 
-        # ---------- 2. 画中画设置区 ----------
+        # ---------- 1. 画中画设置区 ----------
         f_pip = ttk.LabelFrame(root, text=" 画中画设置（小视频目录留空则不启用） ")
-        f_pip.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        f_pip.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
         # 2.1 位置与尺寸
         r1 = ttk.Frame(f_pip)
@@ -2055,9 +2086,9 @@ class App(tk.Tk):
         ttk.Entry(r3, width=4, textvariable=self.rnd_jitter).pack(side="left")
         ttk.Label(r3, text="px").pack(side="left")
 
-        # ---------- 3. 运行参数区 ----------
+        # ---------- 2. 运行参数区 ----------
         f_run = ttk.Frame(root)
-        f_run.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        f_run.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(f_run, text="并发线程数").pack(side="left")
         ttk.Spinbox(f_run, from_=1, to=32, width=5,
                     textvariable=self.workers_var).pack(side="left", padx=(6, 18))
@@ -2074,7 +2105,7 @@ class App(tk.Tk):
         ttk.Label(f_run, textvariable=self.out_var, foreground="#0a6").pack(side="left")
 
         bar = ttk.Frame(root)
-        bar.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        bar.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self.btn_start = ttk.Button(bar, text="开始处理", command=self._start)
         self.btn_start.pack(side="left")
         self.btn_stop = ttk.Button(bar, text="停止", command=self._stop, state="disabled")
@@ -2082,12 +2113,12 @@ class App(tk.Tk):
         self.btn_open = ttk.Button(bar, text="打开输出目录", command=self._open_out)
         self.btn_open.pack(side="left", padx=8)
 
-        # ---------- 4. 进度 / 状态 + 系统资源监控 ----------
+        # ---------- 3. 进度 / 状态 + 系统资源监控 ----------
         self.progress = ttk.Progressbar(root, mode="determinate")
-        self.progress.grid(row=5, column=0, sticky="ew", pady=(8, 2))
+        self.progress.grid(row=4, column=0, sticky="ew", pady=(8, 2))
 
         f_stat = ttk.Frame(root)
-        f_stat.grid(row=6, column=0, sticky="ew")
+        f_stat.grid(row=5, column=0, sticky="ew")
         self.status = ttk.Label(f_stat, text="就绪")
         self.status.pack(side="left")
 
@@ -2110,8 +2141,8 @@ class App(tk.Tk):
         self.mon_proc_text.pack(side="left", padx=(14, 0))
 
         f_log = ttk.Frame(root)
-        f_log.grid(row=7, column=0, sticky="nsew", pady=(4, 0))
-        root.rowconfigure(7, weight=1)   # 日志区占据剩余空间
+        f_log.grid(row=6, column=0, sticky="nsew", pady=(4, 0))
+        root.rowconfigure(6, weight=1)   # 日志区占据剩余空间
         f_log.columnconfigure(0, weight=1)
         f_log.rowconfigure(0, weight=1)
         # 等宽字体按平台选择：Windows=Consolas / macOS=Menlo / Linux=DejaVu Sans Mono
