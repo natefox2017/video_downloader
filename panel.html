@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>抖晓晓 抖音视频下载</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+
+<body>
+  <!-- 工具栏：全选 / 反选 / 批量下载 -->
+  <div class="toolbar">
+    <label class="toolbar__all">
+      <input type="checkbox" id="select-all" />
+      <span>全选</span>
+    </label>
+    <button type="button" class="btn" id="invert">反选</button>
+    <span class="toolbar__count" id="count">共 0 条 · 已选 0</span>
+    <button type="button" class="btn btn--primary" id="download">批量下载</button>
+  </div>
+
+  <!-- 视频列表 -->
+  <ul class="list" id="list"></ul>
+
+  <!-- 空状态 -->
+  <div class="empty" id="empty">
+    <div class="empty__icon">🎬</div>
+    <p>还没有识别到视频</p>
+    <small>在抖音里播放一个视频后，这里会自动出现</small>
+  </div>
+
+  <!-- 轻提示 -->
+  <div class="toast" id="toast"></div>
+
+  <script src="panel.js"></script>
+</body>
+
+</html>

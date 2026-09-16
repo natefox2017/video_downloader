@@ -1,0 +1,107 @@
+# AGENTS.md
+
+给 AI 编码助手（Codex / Claude Code / WorkBuddy 等）的项目须知。**动手前先读完本文**，尤其是「架构不变量」与「易踩坑点」两节——那里记录的每一条都是踩过的坑。
+
+---
+
+## 1. 项目概览
+
+本仓库有两个**互不依赖**的组件，改其中一个不需要管另一个：
+
+| 组件 | 入口 | 技术栈 | 启动/加载方式 |
+|---|---|---|---|
+| 抖音批量下载器 | `manifest.json` | Chrome MV3 + 原生 JS（无框架、无构建） | `chrome://extensions/` → 开发者模式 → 加载已解压的扩展 |
+| 视频批处理工具 | `video_frame_tool.py` | Python 3.8+ 标准库 + Tkinter + ffmpeg | `python3 video_frame_tool.py` |
+
+两个组件都是**单文件直改即生效**的形态：扩展没有打包步骤，Python 工具没有依赖安装步骤。**不要引入构建工具、打包器、npm 依赖或第三方 Python 包**（`imageio-ffmpeg` 是唯一例外，且仅在找不到系统 ffmpeg 时作为兜底被动态导入）。
+
+## 2. 开发与自检命令
+
+改完代码后按组件跑对应检查。CI（`.github/workflows/ci.yml`）跑的就是这一套：
+
+```bash
+# 扩展：语法 + 清单校验
+node --check background.js
+node --check content.js
+node --check injected.js
+node --check panel.js
+node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
+
+# Python 工具：编译检查（不会真正启动 GUI）
+python3 -m py_compile video_frame_tool.py
+```
+
+功能验证建议（两个组件都没有自动化测试框架，只能手工/脚本验证）：
+
+- **扩展**：改完在 `chrome://extensions/` 点刷新 → 打开 `douyin.com` 播一个视频 → 点图标出面板 → 勾选下载。看 console 有无报错，比对下载文件是否完整可播放。
+- **Python 工具**：用 `ffmpeg -f lavfi -i color=...` 造几条测试素材（不同分辨率、含/不含音轨、时长各异），跑完用 `ffprobe` 校验输出**帧数、时长、分辨率**，并用 `ffmpeg -vf select=eq(n\,N)` 抽帧做**像素级抽检**（背景色、产品图位置、画中画出界与否）。这是本项目验证的既定手法，改滤镜链后务必照做。
+
+## 3. 架构不变量（不要破坏）
+
+### 3.1 扩展
+
+1. **抓取与下载必须分在两个世界。**
+   `injected.js` 跑主世界读 `window.player`（隔离世界读不到页面 JS 变量）；下载只在 `content.js`（隔离世界有 `host_permissions`，`fetch` 不受跨域限制）。**不要把 `fetch`/下载逻辑搬进 `injected.js`，也不要把读播放器的逻辑搬进 `content.js`。**
+2. **面板只做界面，不做下载。**
+   `panel.js` 与父页面跨源，只能通过 `postMessage` 收发指令；下载、去重、并发全在 `content.js`。
+3. **关闭面板 = `display:none`，不销毁。**
+   隐藏面板不能中断正在进行的下载。
+4. **权限保持最小。**
+   当前 `permissions` 只有 `scripting`。下载用「`fetch` → `Blob` → `<a download>`」实现，**不要为了下载而申请 `downloads` 权限**，也不要申请 `storage`（已下载记录用页面 `localStorage`）。
+5. **消息协议改动必须双向同步。**
+   新增 message type 时，`content.js` 与 `panel.js` 的 sender / receiver 一起改，并更新 `README.md` 的协议表。
+6. **注入脚本要幂等。**
+   两个脚本都用 `window.__DY_*__` 守卫防止重复注入（扩展重载、SPA 跳转会触发重复注入），新增入口时保持这个模式。
+
+### 3.2 Python 工具
+
+1. **零硬编码路径。**
+   代码里**不允许出现任何具体用户路径**（如 `/Users/xxx/...`、`C:\Users\...`）。所有路径来自用户选择，并持久化到 `settings.json`。新增可配置项请走 `DEFAULT_SETTINGS` 结构 + `load_settings()` / `save_settings()`。
+2. **平台差异只允许写在文件开头的「零、平台适配层」。**
+   其它任何位置出现 `if sys.platform == ...` 或 `os.name == "nt"` 都算违规。平台函数**必须支持显式传 `platform=` 参数**，以便在不换系统的前提下验证三个分支。
+3. **性能约束是硬要求**（详见 `video_frame_tool.py` 模块 docstring 与 README「性能设计」）：
+   - 素材池探测结果必须走缓存（内存 + `.pip_cache.json` + 目录指纹），不得每次重新逐个 `ffprobe`；
+   - 并发处理时必须给每个 ffmpeg 分配线程配额 `max(1, CPU核数 // 并发数)`，不得放任 N 个编码器抢满核心；
+   - 单次成片只允许编码两遍（画中画片段一次 + 最终合成一次），不要把首帧替换/产品图/画中画拆成多次全量重编码；
+   - 日志必须限流（控件保留 1500 行 + 批量插入），不得在循环里逐条刷新 Tk 控件。
+4. **画中画必须全程静音。**
+   素材轨统一 `-an`。最终输出只保留主视频一条音轨。
+5. **成片时长必须锁死为主视频时长。**
+   画中画轨自行拼接后截断/补齐，最终输出再加 `-t` 兜底，避免因片段舍入导致时长漂移。
+
+## 4. 易踩坑点（血泪教训，改代码前先看）
+
+| 坑 | 说明 |
+|---|---|
+| **`performance.memory` 是 getter，每次访问返回新快照** | 把它存进变量后在轮询里反复读属性，读到的永远是那一瞬间的冻结值，内存释放了也判不出来。必须**每次重新访问** `performance.memory` |
+| **`blob.arrayBuffer()` 会复制整份数据** | 音轨检测只允许对 `blob.slice(0, 2MB)` 调用，直接对整个 Blob 调用等于每路并发再多占一份视频大小的内存 |
+| **worker 错峰启动的时间不能太长** | 实测 10 线程 × 80 ms 错峰，跨度 720 ms，遇到 300 ms 就能返回的小文件时并发峰值只有 8。当前 40 ms 是刻意压下来的，调大前先算跨度 |
+| **`setpts` 必须放在滤镜链里** | 加速用 `setpts=PTS/倍数`，它属于视频滤镜，要拼进 `-vf`，不要当成独立参数写在命令行上 |
+| **并发任务重复扫描素材池** | 已用「进程内缓存 + 锁」解决；新增扫描入口时必须复用 `scan_pip_pool()`，不要在别处再写一份探测逻辑 |
+| **Tk 关闭时序** | `after()` 定时器要在 `WM_DELETE_WINDOW` 里 `after_cancel`，否则关窗时报 `invalid command name ..._poll_queue` |
+| **画中画源尺寸/比例与目标不一致** | 必须显式处理：`force_original_aspect_ratio` + 裁剪填满或加黑边，并按偶数对齐（h264 要求宽高为偶数）。实测踩坑：等比放大到"覆盖目标"后忘了 `crop`，3840×2160 素材填 258×384 得 683×384 奇数宽，x264 直接 `Invalid argument`，整条视频丢掉画中画。**crop_fill 分支必须无条件补 `crop=W:H`**，不要只在 `zoom > 1` 时补 |
+| **别把「批量编码」当提速卖点** | 实测 400 秒成片 133 段：进程数 133 → 17，墙钟时间持平（64.8s vs 65.7s）——该阶段瓶颈在素材解码。批处理的收益是进程数少一个数量级、CPU 峰值平稳。提速大头是线程配额。改这条前先跑基准，别凭直觉写「性能提升 N 倍」 |
+| **`.DS_Store` / `__pycache__` / `.workbuddy/` 不要提交** | 已在 `.gitignore` 排除。`.workbuddy/` 存本机记忆与原始插件备份，含本地绝对路径，**保留在本地但永不入库** |
+
+## 5. 代码风格约定
+
+- **注释与文档用中文**，与现有代码保持一致；每个文件顶部有一段说明职责的块注释，每个函数有 docstring（说明参数、返回、副作用）。
+- **命名**：JS 用 `camelCase` 函数 / `SCREAMING_SNAKE_CASE` 常量；Python 用 `snake_case` / `SCREAMING_SNAKE_CASE`，模块内 `_private` 前缀表示内部函数。
+- **不要引入 emoji 到代码与文档**（扩展日志前缀 `[抖晓晓]` 是既有文案，保留）。
+- **注释解释「为什么」，不复述「做了什么」**；涉及性能与时序的数字（阈值、间隔、上限）要在注释里写清来源或实测依据。
+- 改动滤镜链 / 并发策略 / 缓存策略时，**同步更新**：`video_frame_tool.py` 顶部 docstring、`README.md` 对应小节、本文件的相关条目。三处不一致即视为未完成。
+
+## 6. 提交规范
+
+- 分支：`main` 为默认分支。
+- commit message 用中文，格式建议 `类型: 简述`，类型取 `feat` / `fix` / `perf` / `docs` / `refactor` / `chore`。
+  例：`perf: 素材池加进程内缓存，并发时只扫描一次`
+- 涉及性能的改动，在 message 正文附上实测前后对比数据。
+- 一次提交只做一件事；格式化改动与功能改动分开。
+
+## 7. 已知待办（未经确认不要擅自处理）
+
+1. **命名不统一**：`manifest.json` 的 `name` 是「抖抖抖 抖音视频下载器 (批量下载)」，而运行时日志与面板标题用「抖晓晓」。统一命名会改变用户在 Chrome 扩展页看到的名字，属于产品决策，**需先与维护者确认**。
+2. **`manifest.json` 的 `description` 仍是早期情绪化文案**，若要上架 Chrome 商店需重写。
+3. **两个组件目前没有自动化测试**：只靠 CI 语法检查与手工验证。若要补，优先补 Python 工具的滤镜链像素级校验（最容易回归）。
+4. **仓库尚未声明开源许可证**：在维护者决定之前不要添加 `LICENSE` 文件。

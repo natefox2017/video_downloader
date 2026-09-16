@@ -1,0 +1,70 @@
+# ============================================================================
+# CI —— 语法与清单校验
+#
+# 本仓库没有构建步骤、没有第三方依赖，因此 CI 只做最低成本但最有价值的检查：
+#   1. 扩展的 4 个 JS 文件语法是否合法（node --check）
+#   2. manifest.json 是否为合法 JSON（MV3 清单写错会让扩展直接加载失败）
+#   3. Python 工具能否通过编译（不启动 GUI，只做语法检查）
+#
+# 注意：这里跑的不是功能测试。滤镜链、并发调度这类逻辑目前依赖手工像素级验证，
+#      详见 AGENTS.md「开发与自检命令」。
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: 语法与清单校验
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      # ---------------- 扩展 ----------------
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 校验扩展 JS 语法
+        run: |
+          set -e
+          for f in background.js content.js injected.js panel.js; do
+            echo "── node --check $f"
+            node --check "$f"
+          done
+          echo "扩展脚本语法全部通过"
+
+      - name: 校验 manifest.json
+        run: |
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            if (m.manifest_version !== 3) throw new Error("manifest_version 必须为 3");
+            if (!m.name || !m.version) throw new Error("缺少 name / version");
+            if (!m.background?.service_worker) throw new Error("缺少 background.service_worker");
+            if (!Array.isArray(m.content_scripts) || !m.content_scripts.length)
+              throw new Error("缺少 content_scripts");
+            console.log("manifest.json 通过：" + m.name + " v" + m.version);
+          '
+
+      # ---------------- Python 工具 ----------------
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 校验 Python 语法
+        run: |
+          python -m py_compile video_frame_tool.py
+          echo "video_frame_tool.py 编译通过"

@@ -1,0 +1,282 @@
+/*
+ * panel.css —— 面板样式
+ * 面板宽度约 350px（原窗口的 2/3），高度由浮层容器控制，列表区域自适应滚动。
+ * 使用浅色简洁风格，与抖音页面并存不抢视线。
+ */
+
+:root {
+  --color-text: #1f2329;
+  --color-text-weak: #8a8f99;
+  --color-border: #eef0f3;
+  --color-primary: #2f6bff;
+  --color-primary-hover: #1f57e0;
+  --color-danger: #f54a45;
+  --color-success: #22b07d;
+  --row-height: 52px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #fff;
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+/* ---------------- 工具栏 ---------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--color-border);
+  background: #fff;
+}
+
+.toolbar__all {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.toolbar__count {
+  flex: 1 1 auto;
+  color: var(--color-text-weak);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: #c6cad1;
+  background: #f7f8fa;
+}
+
+.btn--primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn--primary:hover {
+  border-color: var(--color-primary-hover);
+  background: var(--color-primary-hover);
+  color: #fff;
+}
+
+.btn--danger {
+  border-color: var(--color-danger);
+  background: #fff;
+  color: var(--color-danger);
+}
+
+.btn[disabled] {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* ---------------- 列表 ---------------- */
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  height: calc(100% - 36px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.list::-webkit-scrollbar-thumb {
+  background: #d8dbe0;
+  border-radius: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--row-height);
+  padding: 6px 10px;
+  border-bottom: 1px solid #f5f6f8;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: #fafbfc;
+}
+
+.row__check {
+  flex: 0 0 auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+.row__cover {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #f2f3f5;
+}
+
+.row__main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row__title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 16px;
+  word-break: break-all;
+}
+
+.row__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--color-text-weak);
+}
+
+.tag {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #eef2ff;
+  color: #4a6bff;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.tag--gallery {
+  background: #e9f8f2;
+  color: var(--color-success);
+}
+
+/* 下载状态：进度条 / 完成 / 失败 */
+.row__state {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  color: var(--color-text-weak);
+}
+
+.row__state.is-done {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+/* 已完成的行：整体降低对比度，一眼区分出「还不用下」的条目 */
+.row.is-done .row__cover {
+  opacity: .55;
+}
+
+.row.is-done .row__title {
+  color: #9aa0a8;
+}
+
+.row__state.is-error {
+  color: var(--color-danger);
+}
+
+.row__bar {
+  height: 3px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: #eef0f3;
+  overflow: hidden;
+  display: none;
+}
+
+.row.is-downloading .row__bar {
+  display: block;
+}
+
+.row__bar-inner {
+  height: 100%;
+  width: 0;
+  background: var(--color-primary);
+  transition: width .2s ease;
+}
+
+/* ---------------- 空状态 / 提示 ---------------- */
+
+.empty {
+  position: absolute;
+  inset: 36px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--color-text-weak);
+  text-align: center;
+  pointer-events: none;
+}
+
+.empty p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.empty__icon {
+  font-size: 28px;
+}
+
+.empty.hidden {
+  display: none;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%) translateY(10px);
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: rgba(31, 35, 41, .88);
+  color: #fff;
+  opacity: 0;
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events: none;
+  max-width: 90%;
+  text-align: center;
+}
+
+.toast.is-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

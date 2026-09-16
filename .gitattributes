@@ -1,0 +1,38 @@
+# ============================================================================
+# .gitattributes —— 统一换行符与文件类型判定
+# 目的：跨平台协作时避免「整文件 diff」；Windows 上 checkout 后仍是 LF，
+#      因为本项目全部是 JS / Python / Markdown 文本，不存在需要 CRLF 的 .bat。
+# ============================================================================
+
+# 默认：由 Git 自动识别文本文件，仓库内统一存 LF
+* text=auto eol=lf
+
+# ---------- 文本文件（统一 LF） ----------
+*.js      text eol=lf
+*.cjs     text eol=lf
+*.mjs     text eol=lf
+*.json    text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+*.py      text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+
+# ---------- 二进制文件（禁止换行符转换与文本 diff） ----------
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.webp    binary
+*.gif     binary
+*.ico     binary
+*.mp4     binary
+*.zip     binary
+*.tar.gz  binary
+
+# ---------- 语言统计修正 ----------
+# 让 GitHub 的语言统计把扩展脚本按 JS 归类，避免被误判
+*.js linguist-detectable=true
+images/* linguist-vendored=false
