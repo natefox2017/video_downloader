@@ -15,9 +15,14 @@
     2. 主图叠加：从「主图目录」里随机取一张，叠在视频中下方，距底部 20px、
                  水平居中、宽度 = 视频宽度 1/4，从第几帧开始显示可设置
                  （默认第 60 帧，填 0 表示首帧就显示）
+                 **可选**：界面上的「显示概率」决定每条视频叠不叠——
+                 100 = 每条必叠（默认），0 = 完全不叠，40 = 40% 概率叠；
+                 每条视频独立掷骰（见 _decide_product），概率 0 时主图目录可留空
     3. 批量处理：扫描所选目录内的视频，多线程并发，输出到 <视频目录>/out/
     4. 画中画  ：从「画中画目录」随机抽取互不重复的片段，拼接成一条静音轨，
                  播放速度可调，叠在画面右上角，总长度自动对齐主视频
+                 **可选**：界面「启用画中画」开关关掉后，既不拼画中画、
+                 也不生成低清副本（进度表自动只算合成一段，见 VideoProgress）
 
 【界面能看到什么】
     总进度只吃真实数字（低清副本 15% / 画中画 25% / 合成 60%），按每条视频的时长加权，
@@ -295,6 +300,13 @@ MARGIN_BOTTOM = 20            # 产品图距视频底部的像素距离
 PRODUCT_WIDTH_RATIO = 0.25    # 产品图宽度 = 视频宽度 * 该比例
 PRODUCT_START_FRAME = 60      # 产品图从第几帧开始显示（默认第 60 帧；填 0 表示首帧就显示）
 PRODUCT_START_MAX = 100000    # 起始帧输入框的防御性上限
+# 商品图显示概率（%）：每条视频**独立**掷一次骰子，不是"整批抽 N 条"。
+#   0   → 完全不叠加商品图（这条只剩首图 + 画中画）
+#   100 → 每条视频都从主图目录里随机取一张叠加
+#   40  → 40% 的概率叠加，60% 的概率这条不叠
+# 概率为 0 或掷骰未命中时，是**真的不做这道工序**（省掉一路输入和一段 overlay），
+# 而不是叠一张透明图糊弄过去（见 _decide_product / build_command）。
+PRODUCT_CHANCE = 100
 
 # ---- 画中画默认几何（比例均相对主视频宽/高，对应参考截图红框） ----
 PIP_W_RATIO = 0.24            # 宽 24%
@@ -411,6 +423,7 @@ DEFAULT_SETTINGS = {
         "pip_dir": "",                  # 画中画目录
     },
     "pip": {                            # 画中画参数（界面输入框用字符串保存）
+        "enabled": True,                # 是否启用画中画（总开关；关掉后不看下面的参数）
         "w": str(int(PIP_W_RATIO * 100)),
         "h": str(int(PIP_H_RATIO * 100)),
         "right": str(int(PIP_RIGHT_RATIO * 100)),
@@ -428,6 +441,7 @@ DEFAULT_SETTINGS = {
     "run": {                            # 运行参数
         "workers": DEFAULT_WORKERS, "preset": DEFAULT_PRESET,
         "prod_start": PRODUCT_START_FRAME,   # 产品图起始帧（默认 60）
+        "prod_chance": PRODUCT_CHANCE,       # 商品图显示概率（%，每条视频独立掷骰）
         "hwaccel": DEFAULT_HWACCEL,          # 硬件加速：自动 / 开启 / 关闭（见 hw_decode_args）
         "include_first": False,              # 旧字段，仅用于兼容老配置，见 load_settings
     },
@@ -2540,43 +2554,64 @@ def build_command(src, opts, info, dst, pip=None):
     滤镜拓扑（一路到底，只编码一次）：
         [1:v] 首帧图 ──┐
                        ├─ concat ─→ 主画面 ─┐
-        [0:v] 原片第2帧起 ┘                    ├─ overlay 产品图 ─ overlay 画中画 ─→ 输出
+        [0:v] 原片第2帧起 ┘                    ├─ overlay 产品图（可选） ─ overlay 画中画（可选） ─→ 输出
         [2:v] 产品图 ─────────────────────────┘
         [3:v] 画中画轨 ───────────────────────────────────┘
+
+    商品图与画中画都是**可选的**：商品图由"显示概率"决定（见 _decide_product），
+    画中画由界面开关决定。谁缺席，谁那一路输入和那段 overlay 就整段不生成，
+    后面的输入索引跟着前移（首图恒为 [1:v]，商品图 [2:v]，画中画 [2:v] 或 [3:v]）。
 
     :param src  : 主视频路径
     :param opts : 选项字典
     :param info : 主视频 probe 结果
     :param dst  : 输出路径
     :param pip  : (画中画文件, 宽, 高) 或 None
-    返回 (命令列表, 产品图输出宽, 产品图输出高)
+    返回 (命令列表, 产品图输出宽, 产品图输出高)；没有商品图时宽高都是 0
     """
     w, h, fps = info["width"], info["height"], info["fps_str"]
-    pw_src, ph_src = opts["prod_size"]
+    # 商品图是**可选**的：概率为 0 或这一条掷骰未命中时，opts 里没有 product，
+    # 直接把这道工序整段省掉（不叠透明图，也不多喂一路输入）。
+    use_prod = bool(opts.get("product")) and bool(opts.get("prod_size"))
 
-    # ---- 产品图目标尺寸：宽 = 视频宽 * 1/4，等比；过高时按可用高度回缩 ----
-    target_w = _even(w * PRODUCT_WIDTH_RATIO)
-    target_h = _even(ph_src * target_w / pw_src)
-    max_h = max(2, h - MARGIN_BOTTOM * 2)
-    if target_h > max_h:
-        target_h = _even(max_h)
-        target_w = _even(pw_src * target_h / ph_src)
+    # ---- 输入索引按实际用到的输入排 ----
+    # [0]=主视频   [1]=首图   [2]=商品图（可选）   [2 或 3]=画中画（可选）
+    # 必须跟着条件一起算：写死 [2:v] 会指到画中画轨上，成片会出现"商品图位置
+    # 变成一片画中画"这种莫名其妙的错位。
+    cover_i = 1
+    prod_i = 2 if use_prod else None
+    pip_i = (3 if use_prod else 2) if pip else None
+
+    target_w = target_h = 0
+    if use_prod:
+        pw_src, ph_src = opts["prod_size"]
+        # ---- 产品图目标尺寸：宽 = 视频宽 * 1/4，等比；过高时按可用高度回缩 ----
+        target_w = _even(w * PRODUCT_WIDTH_RATIO)
+        target_h = _even(ph_src * target_w / pw_src)
+        max_h = max(2, h - MARGIN_BOTTOM * 2)
+        if target_h > max_h:
+            target_h = _even(max_h)
+            target_w = _even(pw_src * target_h / ph_src)
 
     overlay_from = max(0, int(opts.get("prod_start", PRODUCT_START_FRAME)))   # 产品图从第几帧开始显示
     fc = (
         # 首帧：图片拉伸到主视频尺寸，只取 1 帧，帧率对齐
-        f"[1:v]scale={w}:{h},setsar=1,format=yuv420p,fps={fps},"
+        f"[{cover_i}:v]scale={w}:{h},setsar=1,format=yuv420p,fps={fps},"
         f"trim=end_frame=1,setpts=PTS-STARTPTS[first];"
         # 剩余帧：主视频从第 2 帧开始
         f"[0:v]trim=start_frame=1,setpts=PTS-STARTPTS,setsar=1,format=yuv420p[rest];"
-        f"[first][rest]concat=n=2:v=1:a=0[vcat];"
-        # 产品图：缩放到目标尺寸，保留透明度
-        f"[2:v]scale={target_w}:{target_h},format=rgba,setsar=1[prod];"
-        # 产品图 overlay：水平居中，距底部 MARGIN_BOTTOM
-        f"[vcat][prod]overlay=x=(W-w)/2:y=H-h-{MARGIN_BOTTOM}:"
-        f"enable='gte(n,{overlay_from})'[v2]"
+        f"[first][rest]concat=n=2:v=1:a=0[vcat]"
     )
-    last = "[v2]"
+    last = "[vcat]"
+    if use_prod:
+        fc += (
+            # 产品图：缩放到目标尺寸，保留透明度
+            f";[{prod_i}:v]scale={target_w}:{target_h},format=rgba,setsar=1[prod];"
+            # 产品图 overlay：水平居中，距底部 MARGIN_BOTTOM
+            f"{last}[prod]overlay=x=(W-w)/2:y=H-h-{MARGIN_BOTTOM}:"
+            f"enable='gte(n,{overlay_from})'[v2]"
+        )
+        last = "[v2]"
     if pip:
         pip_file, pip_w, pip_h = pip
         # 位置随机微抖动（±N px），抗哈希；对观感几乎无影响
@@ -2586,7 +2621,7 @@ def build_command(src, opts, info, dst, pip=None):
         right = _even(w * opts["pip_right"]) + jx
         top = _even(h * opts["pip_top"]) + jy
         fc += (
-            f";[3:v]scale={pip_w}:{pip_h},setsar=1,fps={fps},format=yuv420p[pip];"
+            f";[{pip_i}:v]scale={pip_w}:{pip_h},setsar=1,fps={fps},format=yuv420p[pip];"
             # eof_action=repeat：若画中画轨比主视频短，定格最后一帧而不是消失
             f"{last}[pip]overlay=x=W-w-{right}:y={top}:eof_action=repeat[vout]"
         )
@@ -2604,7 +2639,9 @@ def build_command(src, opts, info, dst, pip=None):
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-nostats", "-progress", "pipe:1"]
     cmd += hw + ["-i", src]
-    cmd += ["-i", opts["cover"], "-i", opts["product"]]
+    cmd += ["-i", opts["cover"]]
+    if use_prod:
+        cmd += ["-i", opts["product"]]
     if pip:
         cmd += hw + ["-i", pip[0]]
     cmd += ["-filter_complex", fc, "-map", last]
@@ -2650,6 +2687,37 @@ def _clamp_prod_start(opts, info, say=None):
     return new
 
 
+def _decide_product(opts):
+    """
+    按「商品图显示概率」为本条视频掷骰，返回一份**新的** opts。
+
+    概率语义（每条视频独立掷骰，不是整批抽签）：
+        0   → 一定不叠加商品图
+        100 → 一定叠加（从主图目录里随机抽一张）
+        40  → 40% 的概率叠加
+
+    未命中时把 `product_files` 置空（下游据此省掉一路输入、一段 overlay 和一次
+    图片尺寸探测），而不是换一张透明图去叠——那样每帧仍要跑一次 alpha 混合。
+
+    必须在 `_pick_images` **之前**调用，否则会白探一次用不到的图片尺寸。
+    返回副本的原因与 `_pick_images` 相同：opts 被同批所有并发视频共享。
+    """
+    try:
+        chance = int(opts.get("prod_chance", PRODUCT_CHANCE))
+    except Exception:
+        chance = PRODUCT_CHANCE
+    chance = max(0, min(100, chance))
+    if chance >= 100:                       # 常见情况：不掷骰子，省掉一次随机数
+        return opts
+    if chance > 0 and random.random() * 100 < chance:
+        return opts
+    new = dict(opts)
+    new["product_files"] = []               # 这条视频不走商品图分支
+    new["product"] = ""
+    new["prod_size"] = None
+    return new
+
+
 def _pick_images(opts):
     """
     为**当前这条视频**随机固定首图与主图，返回一份新的 opts。
@@ -2658,27 +2726,36 @@ def _pick_images(opts):
     同一条视频全程只用挑中的那两张——中途不再换图，否则观众能看出来。
 
     只传单个文件时等价于"目录里只有这一张"，行为与以前完全一致。
+    首图与主图**各自独立**处理：商品图概率为 0 时主图目录会是空的，
+    这时首图仍然要照常抽（首帧图是成片的必要拼图，与商品图无关）。
 
     注意返回的是**副本**：opts 由多个并发视频共享，绝不能就地修改。
-    取不到图时原样返回，由上游的参数校验负责提示。
+    两边都取不到图时等价于原样返回，由上游的参数校验负责提示。
 
     挑中的文件名记在返回值的 picked_cover / picked_product 里，
     由调用方拼进"完成"那一行——这样每条视频只占一行日志，信息也不丢。
     """
     covers = opts.get("cover_files") or list_images(opts.get("cover"))
     prods = opts.get("product_files") or list_images(opts.get("product"))
-    if not covers or not prods:
+    if not covers and not prods:
         return opts
 
     new = dict(opts)
-    new["cover"] = random.choice(covers)
-    new["product"] = random.choice(prods)
-    try:
-        new["prod_size"] = probe_image_size(new["product"])
-    except Exception:
-        new["prod_size"] = opts.get("prod_size")   # 读不到尺寸就沿用外面给的
-    new["picked_cover"] = os.path.basename(new["cover"])
-    new["picked_product"] = os.path.basename(new["product"])
+    if covers:
+        new["cover"] = random.choice(covers)
+        new["picked_cover"] = os.path.basename(new["cover"])
+    if prods:
+        new["product"] = random.choice(prods)
+        try:
+            new["prod_size"] = probe_image_size(new["product"])
+        except Exception:
+            new["prod_size"] = opts.get("prod_size")   # 读不到尺寸就沿用外面给的
+        new["picked_product"] = os.path.basename(new["product"])
+    elif opts.get("product") and not os.path.isfile(opts.get("product") or ""):
+        # 目录里一张可用图片都没有：宁可这条不叠商品图，也不能把"目录路径"
+        # 当成图片喂给 ffmpeg（那会是一条看不懂的输入错误）
+        new["product"] = ""
+        new["prod_size"] = None
     return new
 
 
@@ -2792,12 +2869,19 @@ def process_one(src, out_dir, opts, registry, log, tag="", on_progress=None):
         if keep:
             log(f"{tag} {msg}" if tag else msg)
 
-    # 本条视频随机固定首图与主图：目录里有多张时每次抽一张，抽定后本条不再变
+    # 先按「商品图概率」掷骰：未命中时这条视频整段不走商品图（见 _decide_product）。
+    # 再随机固定首图与主图：目录里有多张时每条抽一张，抽定后本条不再变。
+    opts = _decide_product(opts)
     opts = _pick_images(opts)
-    opts = _clamp_prod_start(opts, info, say)      # 起始帧超出视频长度时自动退到最后一帧
+    if opts.get("product"):
+        opts = _clamp_prod_start(opts, info, say)   # 起始帧超出视频长度时自动退到最后一帧
     picked = ""
     if opts.get("picked_cover"):
-        picked = f"，首图 {opts['picked_cover']} · 主图 {opts['picked_product']}"
+        picked = f"，首图 {opts['picked_cover']}"
+    if opts.get("picked_product"):
+        picked += f" · 主图 {opts['picked_product']}"
+    else:
+        picked += " · 本条不加商品图"
     say(f"开始处理（时长 {fmt_duration(info['duration'])}{picked}）")
 
     tmpdir, pip = None, None
@@ -2891,7 +2975,9 @@ class App(tk.Tk):
         self.dir_var = tk.StringVar(value=sp.get("video_dir", ""))
         self.pip_var = tk.StringVar(value=sp.get("pip_dir", ""))
 
-        # ---- 画中画几何 ----
+        # ---- 画中画：总开关 + 几何 ----
+        # 开关关掉时下面的参数全部不生效（也不生成低清副本、不拼画中画轨）
+        self.pip_on = tk.BooleanVar(value=bool(sc.get("enabled", True)))
         self.pip_w = tk.StringVar(value=str(sc.get("w", "24")))
         self.pip_h = tk.StringVar(value=str(sc.get("h", "20")))
         self.pip_right = tk.StringVar(value=str(sc.get("right", "8")))
@@ -2920,6 +3006,12 @@ class App(tk.Tk):
         except Exception:
             _prod_start = PRODUCT_START_FRAME
         self.prod_start_var = tk.IntVar(value=_prod_start)    # 产品图从第几帧开始显示
+        # 商品图显示概率（%）：每条视频独立掷骰；0 = 完全不叠加，100 = 每条都叠
+        try:
+            _prod_chance = int(float(str(su.get("prod_chance", PRODUCT_CHANCE))))
+        except Exception:
+            _prod_chance = PRODUCT_CHANCE
+        self.prod_chance_var = tk.IntVar(value=max(0, min(100, _prod_chance)))
         self.preset_var = tk.StringVar(value=su.get("preset", DEFAULT_PRESET))
         # 硬件加速：老配置里没有这个字段，回落默认值（见 hw_decode_args）
         _hw = su.get("hwaccel", DEFAULT_HWACCEL)
@@ -2991,6 +3083,11 @@ class App(tk.Tk):
             prod_start = int(float(str(self.prod_start_var.get())))
         except Exception:
             prod_start = PRODUCT_START_FRAME
+        try:
+            prod_chance = int(float(str(self.prod_chance_var.get())))
+        except Exception:
+            prod_chance = PRODUCT_CHANCE
+        prod_chance = max(0, min(100, prod_chance))
         return {
             "version": SETTINGS_VERSION,
             "paths": {
@@ -3000,6 +3097,7 @@ class App(tk.Tk):
                 "pip_dir": self.pip_var.get().strip(),
             },
             "pip": {
+                "enabled": bool(self.pip_on.get()),
                 "w": self.pip_w.get(), "h": self.pip_h.get(),
                 "right": self.pip_right.get(), "top": self.pip_top.get(),
                 "fill": self.pip_fill.get(),
@@ -3016,6 +3114,7 @@ class App(tk.Tk):
                 "workers": workers,
                 "preset": self.preset_var.get(),
                 "prod_start": prod_start,            # 产品图起始帧
+                "prod_chance": prod_chance,          # 商品图显示概率（%）
                 "hwaccel": self.hwaccel_var.get(),   # 硬件加速（自动/开启/关闭）
             },
         }
@@ -3085,12 +3184,28 @@ class App(tk.Tk):
                  lambda: self._pick_dir(self.cover_var, "选择首图目录（每条视频随机取一张）"))
         path_row(1, "主图目录", self.product_var,
                  lambda: self._pick_dir(self.product_var, "选择主图目录（每条视频随机取一张）"))
+        # 商品图显示概率就挂在这一行：语义上它就是"主图目录"的开关。
+        # 0 表示完全不叠加商品图（此时主图目录可以留空），100 表示每条视频必取一张。
+        ttk.Label(f_path, text="显示概率", style="Muted.TLabel").grid(
+            row=1, column=3, sticky="e", padx=(14, 4), pady=3)
+        ttk.Spinbox(f_path, from_=0, to=100, width=5,
+                    textvariable=self.prod_chance_var).grid(row=1, column=4, sticky="w", pady=3)
+        ttk.Label(f_path, text="%（0=不叠加　100=每条必取一张；每条视频独立掷骰）",
+                  style="Muted.TLabel").grid(row=1, column=5, sticky="w", padx=(4, 0), pady=3)
         path_row(2, "视频目录", self.dir_var, lambda: self._pick_dir(None, "选择视频目录"))
         path_row(3, "画中画目录", self.pip_var, lambda: self._pick_dir(self.pip_var, "选择画中画目录"))
 
         # ---------- 1. 画中画设置区 ----------
         f_pip = section(1, "画中画设置")
-        ttk.Label(f_pip, text="画中画目录留空时不启用", style="Muted.TLabel").pack(anchor="w", padx=8, pady=(0, 6))
+        pip_head = ttk.Frame(f_pip)
+        pip_head.pack(fill="x", padx=8, pady=(0, 6))
+        ttk.Checkbutton(pip_head, text="启用画中画", variable=self.pip_on,
+                        command=self._toggle_pip).pack(side="left")
+        self.lbl_pip_hint = ttk.Label(pip_head, text="", style="Muted.TLabel")
+        self.lbl_pip_hint.pack(side="left", padx=8)
+        # 目录一改就刷新提示（选了目录 / 清空目录都要立刻反映出来）
+        self.pip_var.trace_add("write", lambda *_: self._refresh_pip_hint())
+        self._refresh_pip_hint()
 
         # 2.1 位置与尺寸
         r1 = ttk.Frame(f_pip)
@@ -3235,6 +3350,23 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------- 选择/打开
     # 每次选择完成后立刻落盘，"上次选择"就是这样被记住的。
+    def _toggle_pip(self):
+        """画中画总开关：关掉时把"预生成低清副本"一并禁用（副本只服务于画中画）"""
+        self.btn_prep.configure(state="normal" if self.pip_on.get() else "disabled")
+        self._refresh_pip_hint()
+
+    def _refresh_pip_hint(self):
+        """刷新画中画开关右侧的提示，让"当前到底会不会拼画中画"一眼可见"""
+        if not hasattr(self, "lbl_pip_hint"):
+            return
+        if not self.pip_on.get():
+            text = "已关闭：不拼画中画，也不会生成低清副本"
+        elif not self.pip_var.get().strip():
+            text = "已启用，但还没选画中画目录"
+        else:
+            text = "已启用"
+        self.lbl_pip_hint.configure(text=text)
+
     def _pick_dir(self, var=None, title="选择目录"):
         p = filedialog.askdirectory(title=title)
         if p:
@@ -3280,6 +3412,11 @@ class App(tk.Tk):
         "换了素材目录 / 调大了画中画尺寸"之后用的，免得下次正式跑的时候干等。
         """
         if self.running:
+            return
+        if not self.pip_on.get():
+            messagebox.showinfo("画中画已关闭",
+                                "没有启用画中画，不需要低清副本。\n"
+                                "要预生成请先勾选「启用画中画」。")
             return
         pip_dir = self.pip_var.get().strip()
         vdir = self.dir_var.get().strip()
@@ -3502,8 +3639,11 @@ class App(tk.Tk):
             "prod_size": None,                        # 由 _start 填充
             "prod_start": int(self._num(self.prod_start_var, PRODUCT_START_FRAME,
                                         0, PRODUCT_START_MAX)),   # 产品图从第几帧开始显示
-            # 画中画
-            "pip_dir": self.pip_var.get().strip() or None,
+            "prod_chance": int(self._num(self.prod_chance_var, PRODUCT_CHANCE,
+                                         0, 100)),   # 商品图显示概率（%，每条视频独立掷骰）
+            # 画中画：总开关关掉时一律当"没启用"，下面的几何参数留着以备下次打开
+            "pip_on": bool(self.pip_on.get()),
+            "pip_dir": (self.pip_var.get().strip() or None) if self.pip_on.get() else None,
             "pip_w": self._num(self.pip_w, 24, 2, 100) / 100.0,
             "pip_h": self._num(self.pip_h, 20, 2, 100) / 100.0,
             "pip_right": self._num(self.pip_right, 8, 0, 90) / 100.0,
@@ -3543,22 +3683,38 @@ class App(tk.Tk):
         if not vdir or not os.path.isdir(vdir):
             messagebox.showwarning("路径无效", f"视频目录不存在：{vdir or '（未选择）'}")
             return
-        # 首图 / 主图允许给目录（每条视频从里面随机取一张），也兼容以前的单个文件
-        for label, key in (("首图目录", "cover"), ("主图目录", "product")):
-            opts[key + "_files"] = list_images(opts[key])
-            if not opts[key + "_files"]:
+        # 首图 / 主图允许给目录（每条视频从里面随机取一张），也兼容以前的单个文件。
+        # 主图只在"商品图概率 > 0"时才要求选：概率 0 就是明确不要商品图，
+        # 这时还逼用户选一个主图目录没有意义。
+        opts["cover_files"] = list_images(opts["cover"])
+        if not opts["cover_files"]:
+            messagebox.showwarning(
+                "缺少参数",
+                f"首图目录里没有找到可用的图片：{opts['cover'] or '（未选择）'}")
+            return
+        opts["product_files"] = []
+        opts["prod_size"] = None
+        if opts["prod_chance"] > 0:
+            opts["product_files"] = list_images(opts["product"])
+            if not opts["product_files"]:
                 messagebox.showwarning(
                     "缺少参数",
-                    f"{label}里没有找到可用的图片：{opts[key] or '（未选择）'}")
+                    f"主图目录里没有找到可用的图片：{opts['product'] or '（未选择）'}\n"
+                    f"（当前商品图概率是 {opts['prod_chance']}%；"
+                    f"完全不要商品图请把概率改成 0）")
                 return
+            try:
+                opts["prod_size"] = probe_image_size(opts["product_files"][0])
+            except Exception as e:
+                messagebox.showerror("主图读取失败", str(e))
+                return
+        if opts["pip_on"] and not opts["pip_dir"]:
+            messagebox.showwarning(
+                "缺少参数",
+                "已勾选「启用画中画」，请先选择画中画目录；\n不需要画中画就取消勾选。")
+            return
         if opts["pip_dir"] and not os.path.isdir(opts["pip_dir"]):
             messagebox.showwarning("路径无效", f"画中画目录不存在：{opts['pip_dir']}")
-            return
-
-        try:
-            opts["prod_size"] = probe_image_size(opts["product_files"][0])
-        except Exception as e:
-            messagebox.showerror("主图读取失败", str(e))
             return
 
         # ---- 立刻切到运行态：先给用户反馈，再去扫目录（扫描可能耗时） ----
@@ -3607,10 +3763,14 @@ class App(tk.Tk):
         self._log(f"视频目录：{vdir}")
         self._log(f"输出目录：{out_dir}")
         self._log(f"首图：从「{os.path.basename(opts['cover'])}」的 "
-                  f"{len(opts['cover_files'])} 张里随机取一张；"
-                  f"主图：从「{os.path.basename(opts['product'])}」的 "
-                  f"{len(opts['product_files'])} 张里随机取一张，"
-                  f"从第 {opts['prod_start']} 帧起显示（同一条视频内固定不变）")
+                  f"{len(opts['cover_files'])} 张里随机取一张")
+        if opts["prod_chance"] <= 0:
+            self._log("商品图：不叠加（概率 0%）")
+        else:
+            self._log(f"商品图：{opts['prod_chance']}% 概率叠加（每条视频独立掷骰）；"
+                      f"命中时从「{os.path.basename(opts['product'])}」的 "
+                      f"{len(opts['product_files'])} 张里随机取一张，"
+                      f"从第 {opts['prod_start']} 帧起显示（同一条视频内固定不变）")
         if opts.get("pip_dir"):
             self._log(f"画中画：素材来自「{os.path.basename(opts['pip_dir'])}」，"
                       f"占画面 {opts['pip_w'] * 100:.0f}% × {opts['pip_h'] * 100:.0f}%（右上角），"
@@ -3618,7 +3778,7 @@ class App(tk.Tk):
                       f"加速 {opts['pip_speed']} 倍"
                       + ("、素材不重复" if opts.get("pip_small") else ""))
         else:
-            self._log("画中画：未启用（画中画目录留空）")
+            self._log("画中画：已关闭（不拼画中画，也不生成低清副本）")
         self._log("抗查重随机化：" + "、".join(
             [f"缩放 ≤{opts['rnd_zoom']}x"] +
             (["水平翻转"] if opts["rnd_flip_h"] else []) +

@@ -370,6 +370,125 @@ def check_output_pixels():
         assert pixel(20, 250, 40)[1] > 230
 
 
+def check_opts_contract():
+    """_collect_opts / _snapshot 对两个新开关的处理（不启动 Tk 窗口）。"""
+    def var(value):
+        """构造一个只会返回固定值的假控件变量。"""
+        return SimpleNamespace(get=lambda: value)
+    app = tool.App.__new__(tool.App)          # 绕过 __init__，直接测参数汇总
+    app.settings = {'pip': {'small': True}}
+    app.cover_var, app.product_var, app.dir_var = var('/c'), var('/p'), var('/v')
+    app.pip_var = var('/pip')
+    app.prod_start_var, app.prod_chance_var = var('60'), var('40')
+    app.pip_w, app.pip_h = var('24'), var('20')
+    app.pip_right, app.pip_top, app.pip_fill = var('8'), var('9'), var('裁剪填满')
+    app.pip_head, app.pip_tail, app.pip_speed = var('10'), var('10'), var('1.2')
+    app.rnd_flip_h, app.rnd_zoom, app.rnd_color, app.rnd_jitter = \
+        var(True), var('1.06'), var(True), var('3')
+    app.preset_var, app.workers_var, app.hwaccel_var = var('快速'), var('5'), var('自动')
+    app.stop_event = threading.Event()
+    app.pip_on = var(True)
+    on = tool.App._collect_opts(app)
+    assert on['pip_dir'] == '/pip' and on['pip_on'] is True, on
+    assert on['prod_chance'] == 40 and on['threads'] >= 1, on
+    app.pip_on = var(False)                   # 关掉开关：画中画目录一律视为未启用
+    off = tool.App._collect_opts(app)
+    assert off['pip_dir'] is None and off['pip_on'] is False, off
+    app.prod_chance_var = var('')             # 输入框被清空时回落默认值，不能抛异常
+    assert tool.App._collect_opts(app)['prod_chance'] == tool.PRODUCT_CHANCE
+    snap = tool.App._snapshot(app)
+    assert snap['pip']['enabled'] is False, snap['pip']
+    assert snap['run']['prod_chance'] == tool.PRODUCT_CHANCE, snap['run']
+
+
+def check_toggles():
+    """商品图概率与画中画开关：都要真实生效，且互不干扰（含可选输入导致的索引前移）。"""
+    def ff(args):
+        """执行测试用 FFmpeg，失败时立即停止检查。"""
+        return subprocess.run([tool.FFMPEG, '-v', 'error', '-y'] + args,
+                              check=True, capture_output=True).stdout
+    # ---- 命令级：概率决定"要不要那一路输入、那一段 overlay" ----
+    info = dict(width=320, height=240, fps_str='25', has_audio=False,
+                acodecs=(), duration=2.0)
+    base = dict(cover='/no/cover.png', product='/no/product.png', prod_size=(32, 32),
+                prod_start=10, rnd_jitter=0, pip_right=.08, pip_top=.09,
+                preset='veryfast', threads=1, hwaccel=tool.HWACCEL_OFF)
+    pip = ('/no/pip.mp4', 64, 48)
+
+    def fc_of(command):
+        """取出命令里的滤镜链，便于断言输入索引。"""
+        return command[command.index('-filter_complex') + 1]
+
+    off = tool._decide_product(dict(base, prod_chance=0))
+    assert off['product'] == '' and off['prod_size'] is None, off
+    command, _, _ = tool.build_command('main.mp4', off, info, 'o.mp4', pip)
+    assert '/no/product.png' not in command, command
+    # 商品图缺席时画中画要前移到 [2:v]；写死 [2:v] 的话这里会指到画中画上
+    assert '[prod]' not in fc_of(command) and '[2:v]' in fc_of(command), fc_of(command)
+
+    on = tool._decide_product(dict(base, prod_chance=100))
+    assert on['product'] == '/no/product.png', on
+    command, _, _ = tool.build_command('main.mp4', on, info, 'o.mp4', pip)
+    assert '/no/product.png' in command and '[3:v]' in fc_of(command), fc_of(command)
+
+    with patch.object(random, 'random', return_value=0.1):       # 10 < 40 → 命中
+        assert tool._decide_product(dict(base, prod_chance=40))['product'] == '/no/product.png'
+    with patch.object(random, 'random', return_value=0.9):       # 90 >= 40 → 不命中
+        miss = tool._decide_product(dict(base, prod_chance=40))
+    assert miss['product'] == '' and miss['product_files'] == [], miss
+    shared = dict(base, prod_chance=0)                           # 同批视频共享同一份 opts
+    tool._decide_product(shared)
+    assert shared['product'] == '/no/product.png', '不能就地改共享的 opts'
+
+    # ---- 成片级：像素位置必须对得上（输入索引算错会在这里暴露） ----
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        pip_dir = root / 'pip'
+        pip_dir.mkdir()
+        ff(['-f', 'lavfi', '-i', 'color=blue:size=320x240:rate=25',
+            '-t', '2', '-c:v', 'libx264', '-threads', '1', str(root / 'main.mp4')])
+        ff(['-f', 'lavfi', '-i', 'color=lime:size=160x120:rate=25',
+            '-t', '3', '-c:v', 'libx264', '-threads', '1', str(pip_dir / 'clip.mp4')])
+        for name, color in [('cover', b'\xff\x00\x00'), ('product', b'\xff\xff\xff')]:
+            (root / (name + '.ppm')).write_bytes(b'P6\n32 32\n255\n' + color * 1024)
+        common = dict(cover=str(root / 'cover.ppm'), product=str(root / 'product.ppm'),
+                      prod_size=(32, 32), pip_w=.24, pip_h=.2, pip_right=.08, pip_top=.09,
+                      pip_fill='crop', pip_speed=1.2, pip_head=.1, pip_tail=.1,
+                      rnd_zoom=1, rnd_flip_h=False, rnd_color=False, rnd_jitter=0,
+                      pip_small=True, preset='veryfast', prod_start=10,
+                      hwaccel=tool.HWACCEL_OFF, threads=2, pip_parallel=1)
+        out = root / 'out'
+        out.mkdir()
+
+        def render(**extra):
+            """按给定开关跑一次真实合成，返回整条成片的 RGB 原始帧。"""
+            notes = []
+            opts = dict(common, **extra)
+            target = tool.process_one(str(root / 'main.mp4'), str(out), opts,
+                                      tool.ProcRegistry(), notes.append)
+            assert any('完成' in line for line in notes), notes
+            return ff(['-i', target, '-map', '0:v:0', '-vsync', '0',
+                       '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'])
+
+        def pixel(raw, frame, x, y):
+            """读取某帧某坐标的 RGB 值。"""
+            offset = (frame * 320 * 240 + y * 320 + x) * 3
+            return raw[offset:offset + 3]
+
+        # A：概率 0 + 开画中画 → 商品图位置是主画面底色，画中画照常贴在右上
+        raw = render(pip_dir=str(pip_dir), prod_chance=0)
+        assert len(raw) == 50 * 320 * 240 * 3, '帧数应为 50'
+        assert pixel(raw, 20, 160, 180)[2] > 230, '概率 0 时不该出现商品图'
+        assert pixel(raw, 20, 250, 40)[1] > 230, '不加商品图不能把画中画挤掉'
+
+        # B：概率 100 + 关画中画 → 商品图照常叠加，且不生成画中画轨
+        with patch.object(tool, 'build_pip_track',
+                          side_effect=AssertionError('画中画已关闭，不应调用')):
+            raw = render(pip_dir=None, prod_chance=100)
+        assert min(pixel(raw, 20, 160, 180)) > 230, '商品图应该照常叠加'
+        assert pixel(raw, 20, 250, 40)[2] > 230, '画中画位置应回到主画面底色'
+
+
 def check_warm_yields():
     """取消预热后只等已运行的两个任务，前台可拿锁，余下素材不再转码。"""
     with tempfile.TemporaryDirectory() as folder:
@@ -514,6 +633,8 @@ if __name__ == '__main__':
     check_run_progress()
     check_waiting_cancel()
     check_output_pixels()
+    check_opts_contract()
+    check_toggles()
     check_warm_yields()
     if '--ui' in __import__('sys').argv:
         check_native_layout()
