@@ -3184,14 +3184,6 @@ class App(tk.Tk):
                  lambda: self._pick_dir(self.cover_var, "选择首图目录（每条视频随机取一张）"))
         path_row(1, "主图目录", self.product_var,
                  lambda: self._pick_dir(self.product_var, "选择主图目录（每条视频随机取一张）"))
-        # 商品图显示概率就挂在这一行：语义上它就是"主图目录"的开关。
-        # 0 表示完全不叠加商品图（此时主图目录可以留空），100 表示每条视频必取一张。
-        ttk.Label(f_path, text="显示概率", style="Muted.TLabel").grid(
-            row=1, column=3, sticky="e", padx=(14, 4), pady=3)
-        ttk.Spinbox(f_path, from_=0, to=100, width=5,
-                    textvariable=self.prod_chance_var).grid(row=1, column=4, sticky="w", pady=3)
-        ttk.Label(f_path, text="%（0=不叠加　100=每条必取一张；每条视频独立掷骰）",
-                  style="Muted.TLabel").grid(row=1, column=5, sticky="w", padx=(4, 0), pady=3)
         path_row(2, "视频目录", self.dir_var, lambda: self._pick_dir(None, "选择视频目录"))
         path_row(3, "画中画目录", self.pip_var, lambda: self._pick_dir(self.pip_var, "选择画中画目录"))
 
@@ -3263,15 +3255,27 @@ class App(tk.Tk):
         ttk.Label(run_options, text="编码速度").pack(side="left")
         ttk.Combobox(run_options, width=7, state="readonly", textvariable=self.preset_var,
                      values=tuple(PRESET_MAP.keys())).pack(side="left", padx=(6, 16))
-        # 产品图起始帧：默认第 60 帧（填 0 表示从第一帧就显示）
-        ttk.Label(run_options, text="主图从第").pack(side="left")
-        ttk.Spinbox(run_options, from_=0, to=PRODUCT_START_MAX, width=6,
-                    textvariable=self.prod_start_var).pack(side="left", padx=(4, 2))
-        ttk.Label(run_options, text="帧开始显示").pack(side="left", padx=(0, 16))
-
         ttk.Label(run_options, text="硬件解码").pack(side="left", padx=(8, 6))
         ttk.Combobox(run_options, width=6, state="readonly", textvariable=self.hwaccel_var,
                      values=HWACCEL_MODES).pack(side="left")
+
+        # 商品图参数单独一行：显示概率与起始帧语义上都挂在「主图目录」这条链上，
+        # 放在这里跟运行参数同区，路径区就只剩"选目录"这一件事。
+        prod_row = ttk.Frame(f_run)
+        prod_row.pack(fill="x", pady=(10, 0))
+        # 显示概率：0 = 完全不叠加商品图（此时主图目录可以留空），100 = 每条视频必取一张。
+        ttk.Label(prod_row, text="显示概率").pack(side="left")
+        ttk.Spinbox(prod_row, from_=0, to=100, width=5,
+                    textvariable=self.prod_chance_var).pack(side="left", padx=(6, 2))
+        ttk.Label(prod_row, text="%").pack(side="left")
+        ttk.Label(prod_row, text="0=不叠加，100=每条必取一张（每条视频独立掷骰）",
+                  style="Muted.TLabel").pack(side="left", padx=(6, 20))
+        # 产品图起始帧：默认第 60 帧（填 0 表示从第一帧就显示）
+        ttk.Label(prod_row, text="主图从第").pack(side="left")
+        ttk.Spinbox(prod_row, from_=0, to=PRODUCT_START_MAX, width=6,
+                    textvariable=self.prod_start_var).pack(side="left", padx=(4, 2))
+        ttk.Label(prod_row, text="帧开始显示").pack(side="left")
+
         output_row = ttk.Frame(f_run)
         output_row.pack(fill="x", pady=(12, 0))
         ttk.Label(output_row, text="输出目录", style="Muted.TLabel").pack(side="left", padx=(0, 12))
