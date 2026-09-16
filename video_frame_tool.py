@@ -10,9 +10,11 @@
     然后输出到源目录下的 out/ 里。
 
 【四项功能】
-    1. 首帧替换：用指定图片替换每个视频的第 1 帧
-    2. 产品图  ：在视频中下方叠加，距底部 20px、水平居中、宽度 = 视频宽度 1/4，
-                 从第几帧开始显示可设置（默认第 60 帧，填 0 表示首帧就显示）
+    1. 首帧替换：从「首图目录」里随机取一张，替换每个视频的第 1 帧
+                 （每条视频固定用抽中的那一张，全程不换）
+    2. 主图叠加：从「主图目录」里随机取一张，叠在视频中下方，距底部 20px、
+                 水平居中、宽度 = 视频宽度 1/4，从第几帧开始显示可设置
+                 （默认第 60 帧，填 0 表示首帧就显示）
     3. 批量处理：扫描所选目录内的视频，多线程并发，输出到 <视频目录>/out/
     4. 画中画  ：从「小视频目录」随机抽取互不重复的片段，拼接成一条静音轨，
                  播放速度可调，叠在画面右上角，总长度自动对齐主视频
@@ -287,6 +289,25 @@ PIP_BATCH = 8                 # 每批片段数（= 单个 ffmpeg 进程的输�
 PIP_BATCH_PRESET = "ultrafast"  # 批次编码档位：画面小（约 260x384）+ 后面还会被重编码一次
 PIP_BATCH_THREADS = 2         # 单批次编码线程数（批内已有多路输入并行解码，不宜再吃多线程）
 
+# ---- 画中画素材的"低清副本"（实测最大的提速项，改动前请看 README 的性能实测） ----
+# 画中画在成片里最终只占约 260x384 像素，而素材原片常见 1080p/4K。
+# 逐项消融实测（48 段 / 3 并发）：
+#     现状                       13~14 秒，内存峰值 6.2 GB
+#     加硬件解码                  8.1 秒（-42%）
+#     素材先降成小副本再拼接       1.0 秒（-93%），内存峰值 0.84 GB（-86%）
+# 原因：图像滤镜、调色、翻转、加速、甚至编码本身的开销都约等于 0，
+#       全部时间都花在"解码 1080p 素材"上。把素材预先变小，解码量直接砍掉一个数量级，
+#       而观感毫无差别——因为素材最终也只显示那么大。
+# 副本只在素材首次出现时生成一次（约 0.3 秒/个），之后长期复用；
+# 副本目录放在素材目录内，不会被当成素材扫进来。
+PIP_SMALL_DIR = ".pip_small"    # 副本存放目录名（位于素材目录内）
+PIP_SMALL_THREADS = 4           # 并发生成副本的线程数（6 个并发只快 10%，但内存多 1.5 倍）
+PIP_SMALL_CRF = 20              # 副本画质（20 接近视觉无损，且副本后面还会被重编码）
+PIP_SMALL_GOP = 15              # 副本关键帧间隔（越小定位越准、越快）
+PIP_SMALL_MIN_SHORT = 480       # 副本短边下限（保证够画中画目标尺寸用）
+PIP_SMALL_HEADROOM = 1.15       # 相对画中画目标尺寸的额外安全余量
+PIP_SMALL_PRESET = "veryfast"   # 副本编码档位（副本后面还要被重编码一次，不必更慢的档）
+
 # ---- 抗查重随机化默认值 ----
 RND_FLIP_H = True             # 随机水平翻转（默认开）
 RND_FLIP_V = False            # 随机垂直翻转（默认关，上下颠倒观感较怪）
@@ -315,8 +336,8 @@ SETTINGS_VERSION = 1
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
     "paths": {                          # 上次选择过的路径（核心：代码里不写死任何路径）
-        "cover": "",                    # 首帧替换图
-        "product": "",                  # 产品图
+        "cover": "",                    # 首图目录（每条视频随机取一张；也兼容单个图片文件）
+        "product": "",                  # 主图目录（同上）
         "video_dir": "",                # 待处理视频目录
         "pip_dir": "",                  # 画中画小视频目录
     },
@@ -329,6 +350,7 @@ DEFAULT_SETTINGS = {
         "head": f"{PIP_HEAD_TRIM:g}",
         "tail": f"{PIP_TAIL_TRIM:g}",
         "speed": f"{PIP_SPEED:g}",
+        "small": True,                  # 是否为画中画素材建立低清加速副本（强烈建议开）
     },
     "random": {                         # 抗查重随机化开关
         "flip_h": RND_FLIP_H, "flip_v": RND_FLIP_V,
@@ -347,12 +369,16 @@ VIDEO_EXTS = {
 }
 KEEP_EXT = {".mp4", ".mov", ".m4v", ".mkv"}   # 可直接承载 h264 的容器，其余统一输出 .mp4
 
+# 可当首图 / 主图用的图片后缀。
+# 首图和主图都支持「给一个目录，每条视频从里面随机取一张」。
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".jfif"}
+
 
 # ============================================================================
 # 一·五、用户配置读写（"记住上次选择"的核心实现）
 # ============================================================================
 # 配置文件位置由 user_config_dir() 按平台决定，内容为 JSON：
-#   paths   —— 首帧替换图 / 产品图 / 视频目录 / 小视频目录（上次选择的路径）
+#   paths   —— 首图目录 / 主图目录 / 视频目录 / 小视频目录（上次选择的路径）
 #   pip     —— 画中画几何、掐头去尾、加速
 #   random  —— 抗查重随机化开关
 #   run     —— 并发数、编码档位、首帧叠加
@@ -1193,6 +1219,48 @@ def probe_duration(path):
     return probe_media(path)["duration"]
 
 
+def probe_dur_size(path):
+    """
+    一次 ffprobe 同时取回「时长 + 显示宽高」（素材池扫描专用）。
+
+    仍是**一次**进程调用，只是多要了两个字段：素材池里这三项都要用——
+    时长决定切成多少段，宽高决定低清副本该生成多大。
+
+    注意这里返回的是**显示尺寸**：手机竖屏视频常见「存储 1920x1080 + 旋转 90°」，
+    ffprobe 的 width/height 报的是存储尺寸，而 ffmpeg 解码时会按元数据自动摆正。
+    不换算的话横屏/竖屏判断会反过来，副本尺寸就跟着错
+    （本机素材池实测：229/402 个属于这种情况）。
+
+    :return: (duration, width, height)，取不到的项为 0
+    """
+    if FFPROBE:
+        try:
+            out = subprocess.run(
+                [FFPROBE, "-v", "error", "-select_streams", "v:0",
+                 "-show_entries",
+                 "stream=width,height:stream_side_data=rotation:format=duration",
+                 "-of", "json", path],
+                capture_output=True, text=True, timeout=60)
+            data = json.loads(out.stdout or "{}")
+            st = (data.get("streams") or [{}])[0]
+            w = int(st.get("width") or 0)
+            h = int(st.get("height") or 0)
+            dur = float((data.get("format") or {}).get("duration") or 0.0)
+            for sd in (st.get("side_data_list") or []):
+                try:
+                    if abs(int(sd.get("rotation") or 0)) % 180 == 90:
+                        w, h = h, w                  # 旋转 90°：显示尺寸是存储尺寸转置
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if w and h and dur > 0:
+                return dur, w, h
+        except Exception:
+            pass
+    info = probe_media(path)                 # 兜底：走完整探测
+    return info["duration"], info["width"], info["height"]
+
+
 def probe_image_size(path):
     """探测图片宽高，返回 (width, height)"""
     streams = (_probe_json(path) if FFPROBE else _probe_fallback(path)).get("streams", [])
@@ -1216,6 +1284,31 @@ def _list_videos(folder):
             if os.path.splitext(f)[1].lower() in VIDEO_EXTS
             and os.path.isfile(os.path.join(folder, f))
         )
+    except Exception:
+        return []
+
+
+def list_images(path):
+    """
+    把用户给的路径解析成「可选图片列表」。
+
+    用途：首图与主图都支持"给一个目录，每条视频从里面随机取一张"。
+      - 传目录    ：列出目录内所有图片，按文件名排序（顺序稳定，便于排查）
+      - 传单个文件：就是它自己（兼容以前"只指定一张图"的用法）
+      - 路径不存在 / 目录里没图片：返回空列表，由调用方决定怎么提示
+
+    只看图片后缀的文件，忽略子目录和其它文件（目录里的 .DS_Store 之类不会被抽到）。
+    """
+    if not path:
+        return []
+    try:
+        if os.path.isfile(path):
+            return [path]
+        if not os.path.isdir(path):
+            return []
+        return [os.path.join(path, f) for f in sorted(os.listdir(path))
+                if os.path.splitext(f)[1].lower() in IMAGE_EXTS
+                and os.path.isfile(os.path.join(path, f))]
     except Exception:
         return []
 
@@ -1288,6 +1381,9 @@ def _pool_cache_path(folder):
 # 进程内素材池缓存：folder -> (目录指纹, 素材列表)
 # 作用：多个并发任务同时启动时，只有第一个真正扫描，其余直接复用内存结果
 _POOL_MEM = {}
+# 素材池记录的字段版本。加字段（如 v2 的宽高、v3 的旋转换算）时把它 +1，
+# 老缓存会自动失效重扫一次，避免下游读到缺字段/口径不一致的记录。
+_POOL_CACHE_V = 3
 _POOL_LOCKS = {}          # folder -> 扫描互斥锁（"单个飞行中"语义）
 _POOL_LOCK = threading.Lock()
 
@@ -1352,7 +1448,7 @@ def scan_pip_pool(folder, log=None):
         try:
             with open(cache_file, "r", encoding="utf-8") as fh:
                 cached = json.load(fh)
-            if cached.get("signature") == sig:
+            if cached.get("signature") == sig and cached.get("v") == _POOL_CACHE_V:
                 items = [it for it in cached.get("items", []) if os.path.exists(it.get("path", ""))]
                 if items:
                     # 命中缓存：不打扰用户，直接复用上次的记录（素材有变动时指纹会失效并重扫）
@@ -1368,10 +1464,12 @@ def scan_pip_pool(folder, log=None):
 
         def _one(path):
             try:
-                d = probe_duration(path)
-                return {"path": path, "dur": float(d)} if d > 0.6 else None
+                d, w, h = probe_dur_size(path)
+                if d > 0.6:
+                    return {"path": path, "dur": float(d), "w": int(w), "h": int(h)}
             except Exception:
-                return None
+                pass
+            return None
 
         with ThreadPoolExecutor(max_workers=SCAN_THREADS) as ex:
             for r in ex.map(_one, files):
@@ -1387,10 +1485,244 @@ def scan_pip_pool(folder, log=None):
         # --- 写缓存（失败不影响主流程） ---
         try:
             with open(cache_file, "w", encoding="utf-8") as fh:
-                json.dump({"signature": sig, "items": items}, fh)
+                json.dump({"v": _POOL_CACHE_V, "signature": sig, "items": items}, fh)
         except Exception:
             pass
         return items
+
+
+def _run_quiet(cmd, timeout=900):
+    """
+    跑一条命令，只要退出码（不注册进 registry、不抛异常）。
+
+    专门给"素材加速副本"这类后台预处理用：单个素材失败不该打断整批，
+    也不该混进底部"正在转码 N 个"的计数里（那个计数是给成片编码看的）。
+    """
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=timeout).returncode
+    except Exception:
+        return 1
+
+
+def _small_short_side(main_w, main_h, opts):
+    """
+    算出素材低清副本的"短边"该取多少像素。
+
+    目标：副本被裁成画中画之后，像素不能比实际显示尺寸还小，否则会糊。
+        需要的像素 = 主视频尺寸 × 画中画占比 × 随机缩放上限 × 安全余量
+    """
+    zoom = max(1.0, float(opts.get("rnd_zoom", 1.0)))
+    need = max(_even(main_w * opts["pip_w"]), _even(main_h * opts["pip_h"]))
+    return max(PIP_SMALL_MIN_SHORT, _even(need * zoom * PIP_SMALL_HEADROOM))
+
+
+def _small_accel_args():
+    """
+    素材副本转码用的「解码加速」参数。
+
+    瓶颈全在"解码 1080p 素材"上，不在编码，所以这里只调解码侧。
+    实测（24 个 1080p 竖屏素材、6 并发、每进程 2 个编码线程）：
+        默认（不限制解码线程）      1.64 个/秒   ← 每个进程的解码器都吃满核心，互相踩
+        -threads 1（限制解码线程）  6.61 个/秒
+        -hwaccel videotoolbox      7.51 个/秒   ← macOS 硬件解码
+    """
+    if sys.platform == "darwin":
+        return ["-hwaccel", "videotoolbox"]
+    return ["-threads", "1"]
+
+
+def _build_small_copy(item, dst, short_side):
+    """
+    生成单个素材的低清副本（供画中画拼接使用）。
+
+    尺寸策略：按素材方向缩放**短边**（横屏缩高度、竖屏缩宽度），
+    并且**只缩小、绝不放大**——放大只会增加解码量，不会多出任何信息。
+
+    其它要点：
+      - 去掉音轨（画中画全程静音，留着白占空间）
+      - 关键帧间隔压到 PIP_SMALL_GOP，定位更快、切出来的起点更准
+      - 先写 .part 临时文件，校验通过后才原子改名，
+        避免"生成了半个文件、下次被当成可用副本"
+      - 校验副本时长与原素材一致（不一致说明编码异常，宁可回退用原片）
+    """
+    w, h = int(item.get("w") or 0), int(item.get("h") or 0)
+    vf = None
+    if w and h:
+        if w >= h:
+            if h > short_side:
+                vf = f"scale=-2:{short_side}"
+        elif w > short_side:
+            vf = f"scale={short_side}:-2"
+    else:
+        vf = f"scale=-2:{short_side}"
+
+    # 临时文件名必须以 .mp4 结尾：ffmpeg 靠扩展名推断输出封装格式，
+    # 写成 "xxx.mp4.part" 会直接报 "Unable to choose an output format"。
+    tmp = dst + ".part.mp4"
+
+    def make(accel):
+        """拼一条完整的转码命令；accel 决定解码侧怎么走"""
+        cmd = ([FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
+               + accel + ["-i", item["path"]])
+        if vf:
+            cmd += ["-vf", vf]
+        cmd += ["-an", "-c:v", "libx264", "-preset", PIP_SMALL_PRESET,
+                "-crf", str(PIP_SMALL_CRF), "-g", str(PIP_SMALL_GOP),
+                "-pix_fmt", "yuv420p", "-threads", "2",
+                "-movflags", "+faststart", tmp]
+        return cmd
+
+    def drop_tmp():
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    try:
+        if _run_quiet(make(_small_accel_args())) != 0:
+            drop_tmp()
+            # 硬解不可用（老机器）或该素材硬解失败 → 退回软解再试一次
+            if _run_quiet(make(["-threads", "1"])) != 0:
+                return
+        d2 = probe_duration(tmp)
+        if abs(d2 - float(item["dur"])) > max(0.3, float(item["dur"]) * 0.02):
+            return
+        os.replace(tmp, dst)
+    except Exception:
+        pass
+    finally:
+        drop_tmp()
+
+
+def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None):
+    """
+    为素材池准备"低清副本"，返回 {原素材路径: 副本路径}。
+
+    为什么值得做（逐项消融实测，48 段 / 3 并发，见 README 性能实测表）：
+        用原素材拼接      13~14 秒，内存峰值 6.2 GB
+        用低清副本拼接     1.0 秒，内存峰值 0.84 GB
+    因为画中画在成片里最终只占约 260x384 像素，解码 1080p 素材纯属浪费。
+
+    成本：副本只在"素材第一次出现 / 素材被改动过"时生成（约 0.3 秒/个），
+    生成一次后长期复用，之后每次处理视频都是秒级。
+
+    容错：素材目录不可写（只读盘、网络盘），或个别素材生成失败时，
+    自动回退用原片，绝不因为加速而影响出片。
+
+    :param pool      : scan_pip_pool 的结果（元素含 path/dur/w/h）
+    :param short_side: 副本短边像素（见 _small_short_side）
+    :return: {原素材: 副本}；不适用时返回 {}
+    """
+    if not pool:
+        return {}
+    folder = os.path.dirname(pool[0]["path"])
+    small_dir = os.path.join(folder, PIP_SMALL_DIR)
+
+    # ---- 目录可写性探测：不可写就整体放弃，全程用原片 ----
+    try:
+        os.makedirs(small_dir, exist_ok=True)
+        probe = os.path.join(small_dir, ".write_test")
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("ok")
+        os.remove(probe)
+    except Exception:
+        if log:
+            log("   素材目录不可写，跳过素材加速副本（不影响出片，只是慢一些）")
+        return {}
+
+    todo, mapping = [], {}
+    for it in pool:
+        src = it["path"]
+        dst = os.path.join(small_dir,
+                           os.path.splitext(os.path.basename(src))[0] + ".mp4")
+        mapping[src] = dst
+        try:
+            need = (not os.path.isfile(dst)
+                    or os.path.getsize(dst) < 4096
+                    or os.path.getmtime(dst) < os.path.getmtime(src))
+        except OSError:
+            need = True
+        if need:
+            todo.append((it, dst))
+
+    if todo:
+        if log:
+            log(f"   首次用到这 {len(todo)} 个素材，正在建立加速副本"
+                f"（只做这一次，以后一直复用）…")
+        t0 = time.time()
+        done = [0]
+        lock = threading.Lock()
+
+        def one(job):
+            if stop_event is not None and stop_event.is_set():
+                return
+            try:
+                _build_small_copy(job[0], job[1], short_side)
+            except Exception:
+                pass
+            with lock:
+                done[0] += 1
+                if log and (done[0] % 25 == 0 or done[0] == len(todo)):
+                    log(f"   素材加速副本 {done[0]}/{len(todo)}")
+
+        with ThreadPoolExecutor(max_workers=max(1, int(threads or PIP_SMALL_THREADS))) as ex:
+            list(ex.map(one, todo))
+        if log:
+            log(f"   素材加速副本已就绪，用时 {time.time() - t0:.1f} 秒"
+                f"（以后处理视频都不再需要这一步）")
+
+    # ---- 只保留真正可用的副本，其余自动回退原片 ----
+    ok = {}
+    for src, dst in mapping.items():
+        try:
+            if os.path.isfile(dst) and os.path.getsize(dst) > 4096:
+                ok[src] = dst
+        except OSError:
+            pass
+    return ok
+
+
+# 已在做"整池补齐"的素材目录（避免重复开线程）
+_SMALL_WARMING = set()
+_SMALL_WARM_LOCK = threading.Lock()
+
+
+def _warm_small_pool_async(folder, main_info, opts, log=None):
+    """
+    后台把整池素材的加速副本补齐（不占用本次任务的等待时间）。
+
+    为什么需要：只建"本次抽到的"素材能让当前任务立刻开跑，但下次随机抽到别的
+    素材又得重新等十几秒。所以在全部视频处理完之后，用低并发把剩下的慢慢补上，
+    等用户下次点开始时整池都已就绪，几乎是秒开。
+
+    中断无害：副本是逐个原子落盘的，中途退出只是没补完，下次接着补。
+    """
+    with _SMALL_WARM_LOCK:
+        if folder in _SMALL_WARMING:
+            return
+        _SMALL_WARMING.add(folder)
+
+    def work():
+        try:
+            pool = scan_pip_pool(folder)
+            if not pool:
+                return
+            short = _small_short_side(main_info["width"], main_info["height"], opts)
+            if log:
+                log("需要补建的副本：后台正在处理（不影响使用，下次会快很多）…")
+            # 并发压到 2：这是"搭便车"的活，不能跟用户正在跑的活抢机器
+            prepare_small_pool(pool, short, None, opts.get("stop_event"), threads=2)
+            if log:
+                log("素材加速副本已基本补齐，下次处理会更快。")
+        except Exception:
+            pass
+        finally:
+            with _SMALL_WARM_LOCK:
+                _SMALL_WARMING.discard(folder)
+
+    threading.Thread(target=work, daemon=True).start()
 
 
 # ============================================================================
@@ -1523,7 +1855,8 @@ def _plan_pip_segments(main, opts, pool, target=None):
                           opts["rnd_color"], color_params,
                           fps, crop_fill, speed)
 
-        specs.append({"path": item["path"], "start": start, "need_src": need_src,
+        specs.append({"path": item.get("path_small") or item["path"],
+                      "start": start, "need_src": need_src,
                       "out_seg": out_seg, "vf": vf})
         total += out_seg
 
@@ -1668,6 +2001,23 @@ def build_pip_track(main, opts, tmpdir, registry, log):
     specs, reused, pw, ph = _plan_pip_segments(main, opts, pool)
     if not specs:
         raise RuntimeError("没有规划出任何画中画片段")
+
+    # ---- 素材加速副本（实测最大的提速项，理由见 PIP_SMALL_DIR 上方注释） ----
+    # 画中画在成片里只占约 260x384 像素，却要解码 1080p 素材——这是画中画阶段
+    # 93% 的时间与 86% 的内存开销所在。先降成小尺寸副本再拼接，观感毫无差别。
+    #
+    # 只给"本次真正抽到的"素材建（几百个素材一次通常只用一百多个），
+    # 反复使用会自然把整池补齐，之后每次都是秒级。
+    if opts.get("pip_small", True):
+        used = {sp["path"] for sp in specs}
+        small = prepare_small_pool([it for it in pool if it["path"] in used],
+                                   _small_short_side(main["width"], main["height"], opts),
+                                   log, opts.get("stop_event"))
+        if small:
+            for sp in specs:
+                dst = small.get(sp["path"])
+                if dst:
+                    sp["path"] = dst
 
     batches = (len(specs) + PIP_BATCH - 1) // PIP_BATCH
     log(f"   准备画中画：从 {len(pool)} 个素材里抽取 {len(specs)} 段，"
@@ -1816,6 +2166,44 @@ def _clamp_prod_start(opts, info, say=None):
     return new
 
 
+def _pick_images(opts, say=None):
+    """
+    为**当前这条视频**随机固定首图与主图，返回一份新的 opts。
+
+    需求：首图和主图各自放在一个目录里，每条视频从目录里随机各挑一张；
+    同一条视频全程只用挑中的那两张——中途不再换图，否则观众能看出来。
+
+    只传单个文件时等价于"目录里只有这一张"，行为与以前完全一致。
+
+    注意返回的是**副本**：opts 由多个并发视频共享，绝不能就地修改。
+    取不到图时原样返回，由上游的参数校验负责提示。
+    """
+    covers = list_images(opts.get("cover"))
+    prods = list_images(opts.get("product"))
+    if not covers or not prods:
+        return opts
+
+    new = dict(opts)
+    new["cover"] = random.choice(covers)
+    new["product"] = random.choice(prods)
+    try:
+        new["prod_size"] = probe_image_size(new["product"])
+    except Exception:
+        new["prod_size"] = opts.get("prod_size")   # 读不到尺寸就沿用外面给的
+    if say:
+        say("首图「%s」，主图「%s」"
+            % (os.path.basename(new["cover"]), os.path.basename(new["product"])))
+    return new
+
+
+def _safe_probe(path):
+    """探测视频信息，失败返回 None（预检阶段用，绝不因为单个文件异常打断整批）"""
+    try:
+        return probe_media(path)
+    except Exception:
+        return None
+
+
 def process_one(src, out_dir, opts, registry, log, tag=""):
     """
     处理单个视频：准备画中画轨 → 一次合成出片 → 输出到 out_dir。
@@ -1829,7 +2217,8 @@ def process_one(src, out_dir, opts, registry, log, tag=""):
     :return: 输出文件路径
     """
     t0 = time.time()
-    info = probe_media(src)
+    # 预检阶段已读过该视频的信息就直接复用，不必再调一次 ffprobe
+    info = (opts.get("infos") or {}).get(src) or probe_media(src)
     base, ext = os.path.splitext(os.path.basename(src))
     out_ext = ext.lower() if ext.lower() in KEEP_EXT else ".mp4"
     dst = os.path.join(out_dir, base + out_ext)
@@ -1841,8 +2230,16 @@ def process_one(src, out_dir, opts, registry, log, tag=""):
     # 本文件的所有日志都带文件名前缀，便于在并发日志里对号入座
     def say(msg):
         log(f"{tag} {msg}" if tag else msg)
+        cb = opts.get("stage_cb")
+        if cb:
+            try:
+                cb(tag, msg)        # 让窗口底部的状态栏同步显示"现在在干什么"
+            except Exception:
+                pass
 
     say(f"开始处理（时长 {fmt_duration(info['duration'])}）")
+    # 本条视频随机固定首图与主图：目录里有多张时每次抽一张，抽定后本条不再变
+    opts = _pick_images(opts, say)
     opts = _clamp_prod_start(opts, info, say)      # 起始帧超出视频长度时自动退到最后一帧
 
     tmpdir, pip = None, None
@@ -1989,6 +2386,7 @@ class App(tk.Tk):
                 "fill": self.pip_fill.get(),
                 "head": self.pip_head.get(), "tail": self.pip_tail.get(),
                 "speed": self.pip_speed.get(),
+                "small": bool(self.settings.get("pip", {}).get("small", True)),
             },
             "random": {
                 "flip_h": bool(self.rnd_flip_h.get()), "flip_v": bool(self.rnd_flip_v.get()),
@@ -2037,8 +2435,12 @@ class App(tk.Tk):
             ttk.Entry(f_path, textvariable=var).grid(row=r, column=1, sticky="ew", **pad)
             ttk.Button(f_path, text="选择…", command=cb, width=9).grid(row=r, column=2, **pad)
 
-        path_row(0, "首帧替换图", self.cover_var, lambda: self._pick_file("选择首帧替换图", self.cover_var))
-        path_row(1, "产品图", self.product_var, lambda: self._pick_file("选择产品图", self.product_var))
+        # 首图 / 主图都是选「目录」：每处理一个视频就从目录里随机各取一张，
+        # 同一条视频全程只用同一对（见 _pick_images）。目录里只放一张图也完全没问题。
+        path_row(0, "首图目录", self.cover_var,
+                 lambda: self._pick_dir(self.cover_var, "选择首图目录（每条视频随机取一张）"))
+        path_row(1, "主图目录", self.product_var,
+                 lambda: self._pick_dir(self.product_var, "选择主图目录（每条视频随机取一张）"))
         path_row(2, "视频目录", self.dir_var, lambda: self._pick_dir(None, "选择视频目录"))
         path_row(3, "小视频目录", self.pip_var, lambda: self._pick_dir(self.pip_var, "选择画中画小视频目录"))
 
@@ -2169,11 +2571,11 @@ class App(tk.Tk):
 
         # 回填的路径若已不存在，只提示不阻断（用户可能换了磁盘或改了名）
         stale = []
-        for label, path, is_dir in (("首帧替换图", self.cover_var.get(), False),
-                                    ("产品图", self.product_var.get(), False),
+        for label, path, is_dir in (("首图目录", self.cover_var.get(), True),
+                                    ("主图目录", self.product_var.get(), True),
                                     ("视频目录", self.dir_var.get(), True),
                                     ("小视频目录", self.pip_var.get(), True)):
-            if path and not (os.path.isdir(path) if is_dir else os.path.isfile(path)):
+            if path and not os.path.isdir(path):
                 stale.append(f"{label}：{path}")
         if stale:
             self._log("注意：下面这些上次用过的路径已经找不到了，请重新选择 → " + "；".join(stale))
@@ -2182,13 +2584,6 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------- 选择/打开
     # 每次选择完成后立刻落盘，"上次选择"就是这样被记住的。
-    def _pick_file(self, title, var):
-        p = filedialog.askopenfilename(
-            title=title, filetypes=[("图片", "*.png *.jpg *.jpeg *.webp *.bmp"), ("全部", "*.*")])
-        if p:
-            var.set(p)
-            self._save_settings()
-
     def _pick_dir(self, var=None, title="选择目录"):
         p = filedialog.askdirectory(title=title)
         if p:
@@ -2308,32 +2703,38 @@ class App(tk.Tk):
             "workers": workers,
             # 编码线程配额：并发 N 路时每路只分 1/ N 的核，避免整机卡死
             "threads": max(1, CPU_COUNT // workers),
+            # 素材加速副本：把画中画素材预先降成小尺寸再拼接（见 prepare_small_pool）
+            "pip_small": bool(self.settings.get("pip", {}).get("small", True)),
+            # 停止信号：素材副本预处理同样要能被打断
+            "stop_event": self.stop_event,
         }
 
     # ------------------------------------------------------------ 主流程
     def _start(self):
         """点击"开始处理"：校验参数 → 收集文件 → 起 worker 线程"""
         opts = self._collect_opts()
+        opts["stage_cb"] = self._stage_cb     # 让底部状态栏跟着处理进度走
         vdir = self.dir_var.get().strip()
 
         # ---- 参数校验 ----
-        for label, path, isdir in (("首帧替换图", opts["cover"], False),
-                                   ("产品图", opts["product"], False),
-                                   ("视频目录", vdir, True)):
-            if not path:
-                messagebox.showwarning("缺少参数", f"请选择{label}")
-                return
-            if (os.path.isdir(path) if isdir else os.path.isfile(path)) is False:
-                messagebox.showwarning("路径无效", f"{label} 不存在：{path}")
+        if not vdir or not os.path.isdir(vdir):
+            messagebox.showwarning("路径无效", f"视频目录不存在：{vdir or '（未选择）'}")
+            return
+        # 首图 / 主图允许给目录（每条视频从里面随机取一张），也兼容以前的单个文件
+        for label, key in (("首图目录", "cover"), ("主图目录", "product")):
+            if not list_images(opts[key]):
+                messagebox.showwarning(
+                    "缺少参数",
+                    f"{label}里没有找到可用的图片：{opts[key] or '（未选择）'}")
                 return
         if opts["pip_dir"] and not os.path.isdir(opts["pip_dir"]):
             messagebox.showwarning("路径无效", f"小视频目录不存在：{opts['pip_dir']}")
             return
 
         try:
-            opts["prod_size"] = probe_image_size(opts["product"])
+            opts["prod_size"] = probe_image_size(list_images(opts["product"])[0])
         except Exception as e:
-            messagebox.showerror("产品图读取失败", str(e))
+            messagebox.showerror("主图读取失败", str(e))
             return
 
         # ---- 立刻切到运行态：先给用户反馈，再去扫目录（扫描可能耗时） ----
@@ -2372,8 +2773,12 @@ class App(tk.Tk):
         self._log("=" * 72)
         self._log(f"开始处理：一共 {len(files)} 个视频，同时处理 {effective} 个。")
         self._log(f"输出目录：{out_dir}")
-        self._log(f"首帧会用「{os.path.basename(opts['cover'])}」替换；"
-                  f"产品图从第 {opts['prod_start']} 帧开始出现在画面中下方。")
+        self._log(f"首图：从「{os.path.basename(opts['cover'])}」的 "
+                  f"{len(list_images(opts['cover']))} 张里，每条视频随机取一张"
+                  f"（同一条视频内固定不变）。")
+        self._log(f"主图：从「{os.path.basename(opts['product'])}」的 "
+                  f"{len(list_images(opts['product']))} 张里随机取一张，"
+                  f"从第 {opts['prod_start']} 帧起显示在画面中下方。")
         if opts["pip_dir"]:
             self._log(f"画中画：素材来自「{os.path.basename(opts['pip_dir'])}」目录，"
                       f"放在右上角，播放速度 {opts['pip_speed']:g} 倍，全程静音。")
@@ -2403,6 +2808,32 @@ class App(tk.Tk):
         total = len(files)
         t0 = time.time()
         self.msg_q.put(("total", total))
+
+        # ---- 阶段 0：先把所有视频的信息读出来（几十毫秒级），再动手干重活 ----
+        # 顺序很重要：读信息很轻，拼画中画 / 合成成片才吃 CPU。
+        # 先把"这次要做多少活"摆到用户面前，点完开始就不会一片空白地干等。
+        self.msg_q.put(("status", "正在读取视频信息…"))
+        infos = {}
+        try:
+            with ThreadPoolExecutor(max_workers=min(8, total)) as ex:
+                for path, res in zip(files, ex.map(_safe_probe, files)):
+                    if res:
+                        infos[path] = res
+            if infos:
+                self._log_q("待处理视频：")
+                tt = 0.0
+                for p in files:
+                    info = infos.get(p)
+                    if info:
+                        tt += info["duration"]
+                        self._log_q(f"   · {os.path.basename(p)}"
+                                    f"　时长 {fmt_duration(info['duration'])}")
+                self._log_q(f"合计 {len(infos)} 个视频，总时长 {fmt_duration(tt)}")
+        except Exception:
+            pass
+        opts["infos"] = infos          # 下游直接复用，省掉重复探测
+        self.msg_q.put(("status", "准备开始处理…"))
+
         with ThreadPoolExecutor(max_workers=max(1, min(opts["workers"], total))) as ex:
             futures = {ex.submit(process_one, f, out_dir, opts, self.registry,
                                  self._log_q, f"[{os.path.basename(f)}]"): f
@@ -2423,9 +2854,28 @@ class App(tk.Tk):
                                           f"（成功 {ok}，失败 {fail}）"))
         self.msg_q.put(("done", (ok, fail, time.time() - t0)))
 
+        # ---- 收尾：趁用户看结果的时候，后台把整池素材的加速副本补齐 ----
+        # 下次再处理（哪怕抽到完全不同的素材）就几乎不用等它了。
+        if opts.get("pip_small", True) and opts.get("pip_dir"):
+            info0 = next(iter(infos.values()), None)
+            if info0:
+                _warm_small_pool_async(opts["pip_dir"], info0, opts, self._log_q)
+
     def _log_q(self, text):
         """供工作线程调用：把日志丢进队列，由主线程统一渲染"""
         self.msg_q.put(("log", text))
+
+    def _stage_cb(self, tag, msg):
+        """
+        供工作线程调用：汇报"当前在处理哪一步"，由主线程刷新底部状态栏。
+
+        必须走消息队列——Tk 控件只能在主线程里碰。
+        文字太长会挤掉右侧的 CPU / 内存读数，所以截断。
+        """
+        text = f"{tag} {msg}".strip()
+        if len(text) > 52:
+            text = text[:51] + "…"
+        self.msg_q.put(("status", text))
 
     def _stop(self):
         """停止：置位停止信号 + 终止所有在跑的 ffmpeg"""
