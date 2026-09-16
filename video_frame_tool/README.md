@@ -52,8 +52,12 @@ pip install -e .
 video-frame-tool
 ```
 
-`run.sh` 会自动把 `src` 挂到 `PYTHONPATH` 并做环境自检
-（Python / tkinter / ffmpeg），缺什么直接给修复命令；指定解释器用 `PYTHON=/path/to/python3 ./run.sh`。
+`run.sh` 会自动把 `src` 挂到 `PYTHONPATH` 并做环境自检（Python / tkinter / ffmpeg），缺什么直接给修复命令。
+
+- **会自己挑解释器**：不是「PATH 里第一个 python3」就用。macOS 上 Homebrew 的 `python3` 常常没装 `python-tk`，
+  脚本会逐个试 `import tkinter`，挑第一个能用的（conda / 系统自带的通常都带 tkinter），并提示它跳过了谁。
+- 指定解释器（不再回退，缺 tkinter 直接报错）：`PYTHON=/path/to/python3 ./run.sh`
+- 只看会用哪个解释器、跑什么命令（不启动界面）：`VFT_DRY_RUN=1 ./run.sh`
 
 ## 开发约定
 

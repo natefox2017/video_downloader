@@ -159,8 +159,8 @@ PYTHONPATH=src python3 -m video_frame_tool     # 免安装，直接跑
 pip install -e . && video-frame-tool
 ```
 
-`run.sh` 会自己把 `src` 挂到 `PYTHONPATH` 再启动，**不需要先安装**；
-启动前顺带检查 Python / tkinter / ffmpeg 是否就绪，缺什么直接给修复命令。
+`run.sh` 会自己把 `src` 挂到 `PYTHONPATH` 再启动，**不需要先安装**；启动前顺带检查 Python / tkinter / ffmpeg，
+并**自动挑一个真正带 tkinter 的解释器**（macOS 上 Homebrew 的 python3 常缺 `python-tk`，会自动改用 conda 或系统自带的）。
 指定解释器：`PYTHON=/path/to/python3 ./run.sh`。
 
 Linux 下若报 `No module named tkinter`：`sudo apt install python3-tk`。

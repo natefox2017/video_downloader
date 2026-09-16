@@ -11,7 +11,7 @@
 | 组件 | 入口 | 技术栈 | 启动/加载方式 |
 |---|---|---|---|
 | 抖音批量下载器 | `manifest.json` | Chrome MV3 + 原生 JS（无框架、无构建） | `chrome://extensions/` → 开发者模式 → 加载已解压的扩展 |
-| 视频批处理工具 | `video_frame_tool/`（src 布局包，入口 `__main__.py`） | Python 3.8+ 标准库 + Tkinter + ffmpeg | `cd video_frame_tool && PYTHONPATH=src python3 -m video_frame_tool` |
+| 视频批处理工具 | `video_frame_tool/`（src 布局包，入口 `__main__.py`） | Python 3.8+ 标准库 + Tkinter + ffmpeg | `cd video_frame_tool && ./run.sh`（一键启动，自动挑带 tkinter 的解释器；也可 `PYTHONPATH=src python3 -m video_frame_tool`） |
 
 两个组件都是**直改即生效**的形态：扩展没有打包步骤，Python 工具没有依赖安装步骤
 （原单文件 `video_frame_tool.py` 已按功能拆分到 `video_frame_tool/src/video_frame_tool/`）。
