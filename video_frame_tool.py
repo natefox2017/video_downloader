@@ -16,15 +16,14 @@
                  水平居中、宽度 = 视频宽度 1/4，从第几帧开始显示可设置
                  （默认第 60 帧，填 0 表示首帧就显示）
     3. 批量处理：扫描所选目录内的视频，多线程并发，输出到 <视频目录>/out/
-    4. 画中画  ：从「小视频目录」随机抽取互不重复的片段，拼接成一条静音轨，
+    4. 画中画  ：从「画中画目录」随机抽取互不重复的片段，拼接成一条静音轨，
                  播放速度可调，叠在画面右上角，总长度自动对齐主视频
 
 【界面能看到什么】
-    除进度条外，底部还实时显示 CPU 使用率、内存占用、本工具自身内存占用与
-    正在转码的任务数（每秒刷新，跨平台实现见"一·六、系统资源监控"）。
-    日志刻意**不做逐条刷屏**：只保留"开始 / 各阶段汇总 / 失败 / 每个视频一行结果"，
-    逐条视频清单与副本、批次的 N/M 进度一律走底部状态栏和进度条（用户明确要求）。
-    这样 30 个视频也只看 30 行结果，不会把一整屏刷掉。
+    总进度在处理阶段平滑估算，单条完成时按已处理视频数校正；处理按钮运行时显示「处理中…」并禁用。
+    资源行显示整机 CPU 和整机内存，每秒采样，不将 Python RSS 当成工具总占用。
+    日志仅保留批次结果与必要异常，每批清空，最多 20 行。
+    「打开副本目录」直接打开当前画中画目录里的 .pip_small，不创建空缓存。
 
 【画中画素材的"去重/抗查重"设计】（关键，改动前务必理解）
     平台查重主要看画面哈希与镜头序列，因此本工具在素材层做多重随机化：
@@ -33,7 +32,7 @@
       c) 片段长度随机  ：每段 4~12 秒（SEG_MIN / SEG_MAX 可调）
       d) 掐头去尾      ：默认丢弃每个素材前 10% 与后 10%（避开片头片尾/水印/黑场）
       e) 播放加速      ：默认 1.2 倍（画面节奏变化，帧序列完全不同）
-      f) 随机水平/垂直镜像翻转
+      f) 随机水平镜像翻转
       g) 随机轻微缩放（1.00~1.06 倍，再裁回固定尺寸，画面像素发生位移）
       h) 随机轻微调色（亮度/对比度/饱和度微扰，肉眼几乎无感但改变像素值）
       i) 画中画位置随机微抖动（±3px）
@@ -44,12 +43,16 @@
        1080p 原片，画中画阶段 93% 的时间与 86% 的内存都耗在这上面。
        **副本是长期缓存、生成后不删**：每次处理前先按台账核对，已生成的直接
        调用（只 stat，不解码不转码，402 个素材核对一次 0.05 秒），
-       只有缺的 / 素材改了 / 画中画调大了的才新建。
+       只有缺的 / 素材改了 / 画中画调大了的才新建。同一素材目录的核对和
+       生成共用一把锁，避免并发主视频/后台预热重复转码并争用临时文件与台账；
+       锁内仍按 PIP_SMALL_THREADS 并行生成不同素材。
     1. 素材池元数据缓存：目录内有 400+ 素材时，逐个 ffprobe 会非常慢。
        首次扫描结果（时长 + 文件指纹）落盘到 <素材目录>/.pip_cache.json，
        下次启动校验指纹后直接复用；进程内还有一层内存缓存，
        多个视频并发时只有第一个真正扫描。
-    2. 素材扫描并行：首次扫描用 16 路线程池并行探测，而非串行。
+    2. 素材扫描并行：首次扫描用 16 路线程池，后续只探测新增/修改文件。
+       图片尺寸按文件指纹缓存，首图/主图目录每批只列一次。
+       热缓存不重写台账，规格升级发布新版本，避免后续每次都重建。
     3. 编码线程配额：按"实际同时处理的视频数"分配，每个 ffmpeg 拿到
        max(1, CPU核数 // 实际并发数) 个线程。**不能用界面上填的并发数**：
        只处理 2 个文件却填了 5，若按 5 分配，2 个文件只能用到 CPU核数/5 的算力，
@@ -61,14 +64,18 @@
     5. 画中画轨道拼接用 stream copy：各批参数完全一致，可直接 -c copy 拼接，
        不再解码重编码。
     6. 日志限流：Text 控件保留最后 LOG_MAX_LINES 行，且每轮批量插入一次，
-       避免高频刷新拖慢 Tk 主线程。
+       避免高频刷新拖慢 Tk 主线程；同轮状态和进度也合并刷新。
     7. 单次成片只编码两遍：画中画片段一次 + 最终合成一次（首帧/产品图/画中画
        全部在同一条 filter_complex 里完成）。
+       GUI 处理阶段平滑估算总进度、单条完成时精确校正，处理按钮在运行时禁用。
+       副本目录按钮复用 small_dir_of()，不创建或删除缓存。
     8. 系统资源监控每秒采样一次，用的都是各平台的原生廉价接口（微秒级），
        不引入 psutil 等第三方依赖，也不做任何可能阻塞界面的操作。
     9. 硬件加速只做解码，且分阶段启用（见 hw_decode_args 的实测表与
        HW_AUTO_STAGES）。**不提供硬件编码**：7 种调法实测全部比 libx264
        veryfast 慢，因为滤镜链跑在 CPU 上，硬编要把每帧搬进搬出 GPU。
+    10. 新任务开始时取消后台预热的剩余工作；已启动的副本生成完成后释放目录锁。
+        停止后不再逐段重试或启动主合成，共享素材列表只在任务副本里洗牌。
 
 【跨平台与配置记忆】（改代码前必读）
     本工具在 Windows / macOS / Linux 上均可运行，代码中**不写死任何素材路径**，
@@ -104,9 +111,10 @@ import tempfile
 import threading
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from functools import lru_cache
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, font as tkfont
 
 # ============================================================================
 # 零、平台适配层（跨平台支持：Windows / macOS / Linux）
@@ -326,7 +334,6 @@ PIP_SMALL_ROSTER = "_说明.txt"  # 放进副本目录的说明（告诉用户�
 
 # ---- 抗查重随机化默认值 ----
 RND_FLIP_H = True             # 随机水平翻转（默认开）
-RND_FLIP_V = False            # 随机垂直翻转（默认关，上下颠倒观感较怪）
 RND_ZOOM = 1.06               # 随机缩放上限（1.0 = 关闭）
 RND_COLOR = True              # 随机亮度/对比度/饱和度微扰
 RND_JITTER = 3                # 画中画位置随机抖动像素（0 = 关闭）
@@ -360,7 +367,7 @@ HW_AUTO_STAGES = (HW_STAGE_COPY, HW_STAGE_PIP_RAW)
 
 # ---- 其它 ----
 CPU_COUNT = os.cpu_count() or 4
-LOG_MAX_LINES = 1500          # 日志控件保留的最大行数，超出丢弃最老的
+LOG_MAX_LINES = 20          # 日志控件保留的最大行数，超出丢弃最老的
 SCAN_THREADS = 16             # 素材扫描的并行探测线程数
 
 # ---- 配置文件结构（默认值的唯一来源：上面的常量） ----
@@ -371,7 +378,7 @@ DEFAULT_SETTINGS = {
         "cover": "",                    # 首图目录（每条视频随机取一张；也兼容单个图片文件）
         "product": "",                  # 主图目录（同上）
         "video_dir": "",                # 待处理视频目录
-        "pip_dir": "",                  # 画中画小视频目录
+        "pip_dir": "",                  # 画中画目录
     },
     "pip": {                            # 画中画参数（界面输入框用字符串保存）
         "w": str(int(PIP_W_RATIO * 100)),
@@ -385,7 +392,7 @@ DEFAULT_SETTINGS = {
         "small": True,                  # 是否为画中画素材建立低清加速副本（强烈建议开）
     },
     "random": {                         # 抗查重随机化开关
-        "flip_h": RND_FLIP_H, "flip_v": RND_FLIP_V,
+        "flip_h": RND_FLIP_H,
         "zoom": f"{RND_ZOOM:g}", "color": RND_COLOR, "jitter": str(RND_JITTER),
     },
     "run": {                            # 运行参数
@@ -411,7 +418,7 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".jfif"
 # 一·五、用户配置读写（"记住上次选择"的核心实现）
 # ============================================================================
 # 配置文件位置由 user_config_dir() 按平台决定，内容为 JSON：
-#   paths   —— 首图目录 / 主图目录 / 视频目录 / 小视频目录（上次选择的路径）
+#   paths   —— 首图目录 / 主图目录 / 视频目录 / 画中画目录（上次选择的路径）
 #   pip     —— 画中画几何、掐头去尾、加速
 #   random  —— 抗查重随机化开关
 #   run     —— 并发数、编码档位、首帧叠加
@@ -769,11 +776,11 @@ class _WindowsResReader:
 class _FallbackResReader:
     """
     兜底：拿不到系统接口时使用。
-    CPU 用 1 分钟平均负载 ÷ 核心数 估算（只是近似值），内存不提供。
+    CPU 与内存均不提供，界面显示缺失标记。
     """
 
     platform = None
-    name = "load average 估算"
+    name = "无可用系统接口"
 
     def cpu_ticks(self):
         return None
@@ -1294,8 +1301,20 @@ def probe_dur_size(path):
     return info["duration"], info["width"], info["height"]
 
 
+_IMAGE_PROBE_LOCK = threading.Lock()
+
+
 def probe_image_size(path):
-    """探测图片宽高，返回 (width, height)"""
+    """按路径、体积及纳秒修改时间复用图片尺寸；并发抽到同一张图只探测一次。"""
+    path = os.path.abspath(path)
+    stat = os.stat(path)
+    with _IMAGE_PROBE_LOCK:
+        return _probe_image_size_cached(path, stat.st_size, stat.st_mtime_ns)
+
+
+@lru_cache(maxsize=256)
+def _probe_image_size_cached(path, size, mtime_ns):
+    """只缓存尺寸，不缓存像素；文件指纹变化自动失效，最多保留 256 条。"""
     streams = (_probe_json(path) if FFPROBE else _probe_fallback(path)).get("streams", [])
     v = next((s for s in streams if s.get("codec_type") == "video"), None)
     if not v or not v.get("width"):
@@ -1312,11 +1331,10 @@ def _even(n):
 def _list_videos(folder):
     """列出目录内的视频文件（不递归），返回排序后的绝对路径列表"""
     try:
-        return sorted(
-            os.path.join(folder, f) for f in os.listdir(folder)
-            if os.path.splitext(f)[1].lower() in VIDEO_EXTS
-            and os.path.isfile(os.path.join(folder, f))
-        )
+        with os.scandir(folder) as entries:
+            return sorted(entry.path for entry in entries
+                          if os.path.splitext(entry.name)[1].lower() in VIDEO_EXTS
+                          and entry.is_file())
     except Exception:
         return []
 
@@ -1384,21 +1402,74 @@ class ProcRegistry:
                 pass
 
 
-def _run(cmd, registry):
+# ffmpeg -progress 每秒左右吐一批 key=value，这里只认 out_time（已编码时长）。
+# 不用 out_time_us / out_time_ms：这两个字段的单位在不同 ffmpeg 版本里不一致
+# （历史上 out_time_ms 实际是微秒），踩过一次就不碰了。
+_PROGRESS_TIME_RE = re.compile(rb"^out_time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
+
+
+def _read_out_time(line, expected_dur):
+    """
+    把 ffmpeg -progress 的一行折成"真实完成度"（0~1）；看不懂的行返回 None。
+
+    这是整条流水线里**唯一**的真实进度来源：ffmpeg 自己编码了多少秒，
+    再除以这条成片的时长，就是这条视频此刻真正的完成度。
+    """
+    if line.startswith(b"progress="):
+        return 1.0 if line.strip() == b"progress=end" else None
+    m = _PROGRESS_TIME_RE.match(line)
+    if not m or expected_dur <= 0:
+        return None
+    secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    return min(1.0, secs / expected_dur)
+
+
+def _run(cmd, registry, on_progress=None, expected_dur=0.0):
     """
     执行一条 ffmpeg 命令并等待结束。
 
     - 进程会注册到 registry，便于用户中途停止
     - 非 0 退出时抛出 RuntimeError，附带 stderr 最后几行，方便定位
+    - 传了 on_progress（命令里要带 -progress pipe:1，见 build_command）时，
+      边跑边把 ffmpeg 汇报的真实编码进度折算成 0~1 回调出去
     """
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     registry.add(p)
+    err_lines = []
+
+    def drain_err():
+        """stderr 必须一直读走：管道写满会把 ffmpeg 卡死在写日志上"""
+        try:
+            for line in p.stderr:
+                err_lines.append(line)
+        except Exception:
+            pass
+
+    err_thread = threading.Thread(target=drain_err, daemon=True)
+    err_thread.start()
     try:
-        _, err = p.communicate()
+        if on_progress is not None and expected_dur > 0:
+            for line in p.stdout:              # -progress pipe:1 的逐行输出
+                frac = _read_out_time(line, expected_dur)
+                if frac is None:
+                    continue
+                try:
+                    on_progress(frac)
+                except Exception:
+                    pass
+        else:
+            p.stdout.read()                    # 不要进度也要读空，避免管道写满
+        p.wait()
     finally:
         registry.discard(p)
+        err_thread.join(timeout=3)
+        for stream in (p.stdout, p.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
     if p.returncode != 0:
-        tail = (err or b"").decode("utf-8", "ignore").strip().splitlines()
+        tail = b"".join(err_lines).decode("utf-8", "ignore").strip().splitlines()
         raise RuntimeError(" | ".join(tail[-3:])[:400] if tail else "ffmpeg 返回非 0")
 
 
@@ -1415,8 +1486,8 @@ def _pool_cache_path(folder):
 # 作用：多个并发任务同时启动时，只有第一个真正扫描，其余直接复用内存结果
 _POOL_MEM = {}
 # 素材池记录的字段版本。加字段（如 v2 的宽高、v3 的旋转换算）时把它 +1，
-# 老缓存会自动失效重扫一次，避免下游读到缺字段/口径不一致的记录。
-_POOL_CACHE_V = 3
+# v4 将文件指纹的修改时间改为纳秒；旧元数据会重扫一次，不重建低清视频副本。
+_POOL_CACHE_V = 4
 _POOL_LOCKS = {}          # folder -> 扫描互斥锁（"单个飞行中"语义）
 _POOL_LOCK = threading.Lock()
 
@@ -1439,7 +1510,7 @@ def _folder_signature(files):
     for f in files:
         try:
             st = os.stat(f)
-            sig[os.path.basename(f)] = [st.st_size, int(st.st_mtime)]
+            sig[os.path.basename(f)] = [st.st_size, st.st_mtime_ns]
         except OSError:
             continue
     return sig
@@ -1453,7 +1524,8 @@ def scan_pip_pool(folder, log=None):
       - 进程内缓存：同一批任务只扫描一次（并发时靠锁保证不重复劳动）
       - 首次扫描：16 路线程池并行 probe（400 个素材约 1 秒）
       - 结果连同目录指纹写入 .pip_cache.json，二次启动毫秒级命中
-      - 素材目录增删文件 / 改动文件后指纹变化，缓存自动失效
+      - 指纹使用体积和纳秒修改时间；目录变化只探测新增/修改的文件
+      - 完全命中时不重写台账；删除的素材从新列表中移除
 
     :param folder: 素材目录
     :param log:    日志回调（可空）
@@ -1476,24 +1548,31 @@ def scan_pip_pool(folder, log=None):
         if mem and mem[0] == sig:
             return mem[1]
 
-        # --- 磁盘缓存 ---
+        # 目录有变化时仍复用未改动文件的记录；只探测新增/变更的素材。
+        cached = {"v": _POOL_CACHE_V, "signature": mem[0], "items": mem[1]} if mem else {}
         cache_file = _pool_cache_path(folder)
-        try:
-            with open(cache_file, "r", encoding="utf-8") as fh:
-                cached = json.load(fh)
-            if cached.get("signature") == sig and cached.get("v") == _POOL_CACHE_V:
-                items = [it for it in cached.get("items", []) if os.path.exists(it.get("path", ""))]
-                if items:
-                    # 命中缓存：不打扰用户，直接复用上次的记录（素材有变动时指纹会失效并重扫）
-                    with _POOL_LOCK:
-                        _POOL_MEM[folder] = (sig, items)
-                    return items
-        except Exception:
-            pass
+        if not cached:
+            try:
+                with open(cache_file, "r", encoding="utf-8") as fh:
+                    cached = json.load(fh)
+            except (OSError, ValueError):
+                cached = {}
+        if (not isinstance(cached, dict) or cached.get("v") != _POOL_CACHE_V
+                or not isinstance(cached.get("signature"), dict)
+                or not isinstance(cached.get("items"), list)):
+            cached = {}
+        old_sig = cached.get("signature") or {}
+        file_set = set(files)
+        reusable = {it["path"]: it for it in cached.get("items", [])
+                    if isinstance(it, dict) and isinstance(it.get("path"), str)
+                    and it["path"] in file_set
+                    and isinstance(it.get("dur"), (int, float)) and it["dur"] > 0.6
+                    and old_sig.get(os.path.basename(it["path"]))
+                    == sig.get(os.path.basename(it["path"]))}
 
         # --- 并行探测 ---
         t0 = time.time()
-        items = []
+        reused_count = len(reusable)
 
         def _one(path):
             try:
@@ -1504,17 +1583,23 @@ def scan_pip_pool(folder, log=None):
                 pass
             return None
 
-        with ThreadPoolExecutor(max_workers=SCAN_THREADS) as ex:
-            for r in ex.map(_one, files):
-                if r:
-                    items.append(r)
+        pending = [path for path in files if path not in reusable]
+        if pending:
+            with ThreadPoolExecutor(max_workers=min(SCAN_THREADS, len(pending))) as ex:
+                for r in ex.map(_one, pending):
+                    if r:
+                        reusable[r["path"]] = r
+        items = [reusable[path] for path in files if path in reusable]
 
-        if log:
-            log(f"已读取 {len(files)} 个小视频素材（用时 {time.time() - t0:.1f} 秒）")
+        if log and pending:
+            log(f"已读取 {len(pending)} 个新增/变更素材，复用 {reused_count} 个缓存"
+                f"（用时 {time.time() - t0:.1f} 秒）")
 
         with _POOL_LOCK:
             _POOL_MEM[folder] = (sig, items)
 
+        if cached.get("signature") == sig and not pending:
+            return items
         # --- 写缓存（失败不影响主流程） ---
         try:
             with open(cache_file, "w", encoding="utf-8") as fh:
@@ -1667,6 +1752,7 @@ def _build_small_copy(item, dst, short_side, hw=None):
         if abs(d2 - float(item["dur"])) > max(0.3, float(item["dur"]) * 0.02):
             return
         os.replace(tmp, dst)
+        return True
     except Exception:
         pass
     finally:
@@ -1712,6 +1798,8 @@ def _read_small_meta(small_dir):
 
 def _write_small_meta(small_dir, meta):
     """原子写台账：先写 .tmp 再改名，避免写一半断电留下坏 JSON"""
+    if meta == _read_small_meta(small_dir):
+        return
     tmp = os.path.join(small_dir, PIP_SMALL_META + ".tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -1819,12 +1907,19 @@ def _small_plan(pool, small_dir, short_side):
              todo    —— [(素材, 目标路径), ...]，空列表 = 全部已生成，直接调用
              meta    —— 台账（含本次补登记的条目，由调用方负责写回）
     """
-    mapping = _small_names(pool, small_dir)
+    if not pool:
+        return {}, [], _read_small_meta(small_dir)
+    paths = {it["path"] for it in pool}
+    # 编号沿用整目录的既有规则，不能随本次随机抽中的子集变化。
+    names = paths | set(_list_videos(os.path.dirname(pool[0]["path"])))
+    all_names = _small_names([{"path": path} for path in sorted(names)], small_dir)
+    mapping = {path: all_names[path] for path in paths}
     meta = _read_small_meta(small_dir)
     ver_ok = meta.get("v") == PIP_SMALL_V
-    items = meta.get("items") if ver_ok else {}
-    if not isinstance(items, dict):
-        items = {}
+    if not ver_ok:
+        # 规格升级后发布新版本；未登记的旧文件也不能再按历史副本认领。
+        meta = {"v": PIP_SMALL_V, "items": {}, "legacy": False}
+    items = meta["items"]
 
     todo = []
     for it in pool:
@@ -1841,7 +1936,8 @@ def _small_plan(pool, small_dir, short_side):
             and (dsz, dmt) == (rec.get("out"), rec.get("outmtime"))
             and float(rec.get("short") or 0) >= float(short_side)
         )
-        if not hit and ver_ok and rec is None and dsz > 4096 and dmt >= smt:
+        if (not hit and ver_ok and meta.get("legacy", True) and rec is None
+                and dsz > 4096 and dmt >= smt and short_side <= PIP_SMALL_MIN_SHORT):
             # 老版本留下的副本（台账里完全没登记过）：认下来并补登记。
             # 注意 short 记的是下限值——我们无法得知当年按多大建的，
             # 记小了意味着"下次要求更大时会重建"，偏保守但不会出错。
@@ -1850,12 +1946,36 @@ def _small_plan(pool, small_dir, short_side):
                           "short": float(PIP_SMALL_MIN_SHORT)}
             hit = True
         if not hit:
+            # 失败后保留失效标记，下一次必须重试，不能把旧文件认领成有效副本。
+            items[key] = {"src": src, "short": 0}
             todo.append((it, dst))
     return mapping, todo, meta
 
 
 def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None,
                        progress_cb=None, hw=None):
+    """同一素材目录串行核对/更新缓存，目录内的副本仍由线程池并行生成。"""
+    if not pool:
+        return {}
+    # 多条主视频及后台预热会共用副本、临时文件和台账；必须先等前一批发布，
+    # 再核对缓存，否则相同素材会重复转码，甚至因临时文件竞争回退到原片。
+    folder = os.path.realpath(small_dir_of(os.path.dirname(pool[0]["path"])))
+    # ponytail: 同目录冷缓存请求串行；若不重叠素材吞吐成为瓶颈，再拆逐文件锁和台账锁。
+    lock = _folder_lock(folder)
+    while not lock.acquire(timeout=0.1):
+        if stop_event is not None and stop_event.is_set():
+            return {}
+    try:
+        if stop_event is not None and stop_event.is_set():
+            return {}
+        return _prepare_small_pool(pool, short_side, log, stop_event, threads,
+                                   progress_cb, hw)
+    finally:
+        lock.release()
+
+
+def _prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None,
+                        progress_cb=None, hw=None):
     """
     为素材池准备"低清副本"，返回 {原素材路径: 副本路径}。
 
@@ -1868,8 +1988,8 @@ def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None
     本函数每次运行都会先按台账盘点一遍——已经生成好的直接拿来用（只 stat，不解码、
     不转码），只有缺的 / 过期了的才新建。所以第二次以后基本是秒过。
 
-    容错：素材目录不可写（只读盘、网络盘），或个别素材生成失败时，
-    自动回退用原片，绝不因为加速而影响出片。
+    容错：素材目录不可写时仍使用已验证的副本；仅缺失或生成失败的素材
+    回退原片，绝不把失败重建留下的旧文件标成有效缓存。
 
     :param pool      : scan_pip_pool 的结果（元素含 path/dur/w/h）
     :param short_side: 副本短边像素（见 _small_short_side）
@@ -1882,24 +2002,12 @@ def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None
     folder = os.path.dirname(pool[0]["path"])
     small_dir = small_dir_of(folder)
 
-    # ---- 目录可写性探测：不可写就整体放弃，全程用原片 ----
-    try:
-        os.makedirs(small_dir, exist_ok=True)
-        probe = os.path.join(small_dir, ".write_test")
-        with open(probe, "w", encoding="utf-8") as fh:
-            fh.write("ok")
-        os.remove(probe)
-    except Exception:
-        if log:
-            log("   素材目录不可写，跳过素材加速副本（不影响出片，只是慢一些）")
-        return {}
-
-    _ensure_small_roster(small_dir)
-
     # ---- 先盘点：哪些早就生成好了（这一步不转码，几百个素材几毫秒） ----
     t0 = time.time()
     mapping, todo, meta = _small_plan(pool, small_dir, short_side)
     ready = len(mapping) - len(todo)
+    if progress_cb is not None:
+        progress_cb(ready, len(pool))
 
     # ---- 全都现成：直接调用，一个字节都不重做 ----
     if not todo:
@@ -1908,6 +2016,22 @@ def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None
                 f"（核对用时 {time.time() - t0:.2f} 秒）")
         _write_small_meta(small_dir, meta)
         return mapping
+
+    pending = {it["path"] for it, _ in todo}
+    ok = {src: dst for src, dst in mapping.items() if src not in pending}
+    # ---- 只在需要生成时探测写权限；只读目录仍复用已验证的副本 ----
+    try:
+        os.makedirs(small_dir, exist_ok=True)
+        probe = os.path.join(small_dir, ".write_test")
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("ok")
+        os.remove(probe)
+    except Exception:
+        if log:
+            log("   素材目录不可写，复用已有有效副本，缺失素材回退原片")
+        return ok
+
+    _ensure_small_roster(small_dir)
 
     if log:
         if ready:
@@ -1926,21 +2050,23 @@ def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None
         if stop_event is not None and stop_event.is_set():
             return
         it, dst = job
+        built = False
         try:
-            _build_small_copy(it, dst, short_side, hw)
+            built = _build_small_copy(it, dst, short_side, hw)
         except Exception:
             pass
         dsz, dmt = _stat_pair(dst)
         ssz, smt = _stat_pair(it["path"])
         with lock:
-            if dsz > 4096:
+            if built and dsz > 4096:
+                ok[it["path"]] = dst
                 items[os.path.basename(dst)] = {
                     "src": it["path"], "size": ssz, "mtime": smt,
                     "out": dsz, "outmtime": dmt, "short": float(short_side)}
             done[0] += 1
-        # 进度不写日志（用户要求不要一行一行刷屏），交给状态栏显示
-        if progress_cb is not None:
-            progress_cb(done[0], len(todo))
+            # 在锁内按顺序发送，避免并发完成时进度倒退。
+            if progress_cb is not None:
+                progress_cb(ready + done[0], len(pool))
 
     with ThreadPoolExecutor(max_workers=max(1, int(threads or PIP_SMALL_THREADS))) as ex:
         list(ex.map(one, todo))
@@ -1948,13 +2074,8 @@ def prepare_small_pool(pool, short_side, log=None, stop_event=None, threads=None
     # ---- 台账落盘：以后就靠它判断"已生成、可直接调用" ----
     _write_small_meta(small_dir, meta)
     if log:
-        log(f"   低清副本已就绪：本次新建 {len(todo)} 个，用时 {time.time() - t1:.1f} 秒。")
-
-    # ---- 只保留真正可用的副本，其余自动回退原片 ----
-    ok = {}
-    for src, dst in mapping.items():
-        if _stat_pair(dst)[0] > 4096:
-            ok[src] = dst
+        log(f"   低清副本：本次新建 {len(ok) - ready}/{len(todo)} 个，"
+            f"用时 {time.time() - t1:.1f} 秒，未成功的回退原片。")
     return ok
 
 
@@ -1987,9 +2108,9 @@ def _warm_small_pool_async(folder, main_info, opts, log=None):
             if log:
                 log("需要补建的副本：后台正在处理（不影响使用，下次会快很多）…")
             # 并发压到 2：这是"搭便车"的活，不能跟用户正在跑的活抢机器
-            prepare_small_pool(pool, short, None, opts.get("stop_event"), threads=2,
-                               hw=opts.get("hwaccel"))
-            if log:
+            got = prepare_small_pool(pool, short, None, opts.get("stop_event"), threads=2,
+                                     hw=opts.get("hwaccel"))
+            if log and len(got) == len(pool):
                 log("低清副本已补齐，以后处理视频会更快。")
         except Exception:
             pass
@@ -2004,20 +2125,20 @@ def _warm_small_pool_async(folder, main_info, opts, log=None):
 # 六、画中画素材轨构建
 # ============================================================================
 
-def _clip_filter(pw, ph, zoom, flip_h, flip_v, color_on, color_params, fps_str, crop_fill, speed=1.0):
+def _clip_filter(pw, ph, zoom, flip_h, color_on, color_params, fps_str, crop_fill, speed=1.0):
     """
     生成单个画中画片段的视频滤镜链（字符串）。
 
     处理顺序说明：
         0) setpts             —— 变速（PTS/speed，配合前面的 -t 实现"加速播放"）
-        1) hflip / vflip      —— 随机镜像
+        1) hflip              —— 随机水平镜像
         2) 统一尺寸 + 居中裁剪 —— zoom 时会先放大再裁回，产生像素位移
         3) eq 调色             —— 亮度/对比度/饱和度的极小扰动
         4) fps / setsar / format —— 与主视频对齐，保证可拼接
 
     :param pw, ph      : 目标画中画尺寸
     :param zoom        : 缩放系数（>=1.0；1.0 表示不缩放）
-    :param flip_h/v    : 是否水平/垂直翻转
+    :param flip_h      : 是否水平翻转
     :param color_on    : 是否启用随机调色
     :param color_params: (brightness, contrast, saturation) 三元组
     :param fps_str     : 主视频帧率字符串
@@ -2030,8 +2151,6 @@ def _clip_filter(pw, ph, zoom, flip_h, flip_v, color_on, color_params, fps_str, 
     parts.append(f"setpts=(PTS-STARTPTS)/{max(0.01, speed):.6f}")
     if flip_h:
         parts.append("hflip")
-    if flip_v:
-        parts.append("vflip")
 
     # ---- 尺寸统一：无论走哪条分支，最后必然得到 pw×ph 的画面 ----
     # 这一点不能省：
@@ -2085,6 +2204,7 @@ def _plan_pip_segments(main, opts, pool, target=None):
     speed = opts["pip_speed"]
     head, tail = opts["pip_head"], opts["pip_tail"]
 
+    pool = list(pool)                  # 缓存列表由并发任务共享，只打乱本次的顺序
     random.shuffle(pool)
     total, specs, reused, i = 0.0, [], False, 0
 
@@ -2126,7 +2246,6 @@ def _plan_pip_segments(main, opts, pool, target=None):
         )
         vf = _clip_filter(pw, ph, zoom,
                           opts["rnd_flip_h"] and random.random() < 0.5,
-                          opts["rnd_flip_v"] and random.random() < 0.5,
                           opts["rnd_color"], color_params,
                           fps, crop_fill, speed)
 
@@ -2181,7 +2300,7 @@ def _encode_pip_batch(batch, dst, registry, hw=None):
     _run(cmd, registry)
 
 
-def _encode_pip_batches(specs, tmpdir, opts, registry, log):
+def _encode_pip_batches(specs, tmpdir, opts, registry, log, prog=None):
     """
     分批编码所有片段，批次之间并行执行（并行度由 opts["pip_parallel"] 决定）。
 
@@ -2199,33 +2318,35 @@ def _encode_pip_batches(specs, tmpdir, opts, registry, log):
     files = [os.path.join(tmpdir, f"b{i:03d}.mp4") for i in range(len(batches))]
     parallel = max(1, min(len(batches), int(opts.get("pip_parallel", 1) or 1)))
     hw = opts.get("hwaccel")
-    cb = opts.get("stage_cb")
 
     done, failed = 0, []
 
     def note(n):
-        """批次进度只刷新状态栏，不写日志（用户要求不要一行一行刷屏）"""
-        if cb:
-            try:
-                cb("画中画", f"{n}/{len(batches)} 批")
-            except Exception:
-                pass
+        """批次进度只喂进度条，不写日志（用户要求：不要一行一行刷屏）"""
+        if prog is not None:
+            prog.count("pip", n, len(batches))   # 真实批次数 → 真实进度
 
     def run_batch(batch, path, bid):
+        _check_stopped(opts)
         try:
             _encode_pip_batch(batch, path, registry, hw)
             return []
         except Exception as e:
+            _check_stopped(opts)
             # 整批失败 → 拆开逐段重试，定位到具体是哪几段有问题
             log(f"   有素材无法编码，正在逐段排查（{e}）")
+            if os.path.exists(path):
+                os.remove(path)       # 失败残留不能混进后面的 stream copy
             ok = []
             bad = []
             for i, sp in enumerate(batch):
+                _check_stopped(opts)
                 seg_path = os.path.join(tmpdir, f"fix_{bid:03d}_{i:02d}.mp4")
                 try:
                     _encode_pip_batch([sp], seg_path, registry, hw)
                     ok.append(seg_path)
                 except Exception:
+                    _check_stopped(opts)
                     bad.append(sp)
             if len(ok) == 1:
                 os.replace(ok[0], path)          # 只剩一段时直接改名复用，省一次拼接
@@ -2272,7 +2393,7 @@ def _concat_pip_batches(files, dst, registry):
     return dst
 
 
-def build_pip_track(main, opts, tmpdir, registry, log):
+def build_pip_track(main, opts, tmpdir, registry, log, prog=None):
     """
     为一条主视频生成画中画轨（静音），返回 (文件路径, 宽, 高)。
 
@@ -2286,6 +2407,7 @@ def build_pip_track(main, opts, tmpdir, registry, log):
     :param tmpdir  : 临时工作目录（调用方负责清理）
     :param registry: 进程注册表
     :param log     : 日志回调
+    :param prog    : VideoProgress（进度条用，可空）；这里喂它副本数与批次数
     """
     pool = scan_pip_pool(opts["pip_dir"], log)
     if not pool:
@@ -2310,12 +2432,17 @@ def build_pip_track(main, opts, tmpdir, registry, log):
     small = {}
     if opts.get("pip_small", True):
         used = {sp["path"] for sp in specs}
-        cb = opts.get("stage_cb")
+
+        def copy_note(n, m):
+            """副本进度按真实个数推进度条"""
+            if prog is not None:
+                prog.count("copy", n, m)
+
         small = prepare_small_pool(
             [it for it in pool if it["path"] in used],
             _small_short_side(main["width"], main["height"], opts),
             log, opts.get("stop_event"), hw=opts.get("hwaccel"),
-            progress_cb=(lambda n, m: cb("低清副本", f"{n}/{m}")) if cb else None) or {}
+            progress_cb=(copy_note if prog else None)) or {}
         opts["small_map"] = small
 
     # 规划发生在建副本之前，所以要把已经规划好的片段改指向副本；
@@ -2329,7 +2456,7 @@ def build_pip_track(main, opts, tmpdir, registry, log):
     log(f"   准备画中画：从 {len(pool)} 个素材里抽取 {len(specs)} 段，"
         f"共 {batches} 批" + ("（素材不够，已循环复用）" if reused else "（素材不重复）"))
 
-    files, failed = _encode_pip_batches(specs, tmpdir, opts, registry, log)
+    files, failed = _encode_pip_batches(specs, tmpdir, opts, registry, log, prog)
 
     # ---- 兜底补段：个别素材坏了、编不出来时，用别的素材把缺掉的时长补回来 ----
     # 最多补两轮，避免极端情况下反复重试。补出来的段直接接在末尾——
@@ -2346,7 +2473,7 @@ def build_pip_track(main, opts, tmpdir, registry, log):
             break
         patch_dir = os.path.join(tmpdir, f"patch{attempt}")
         os.makedirs(patch_dir, exist_ok=True)
-        more_files, failed = _encode_pip_batches(extra, patch_dir, opts, registry, log)
+        more_files, failed = _encode_pip_batches(extra, patch_dir, opts, registry, log, prog)
         files += more_files
         # 补段如果也失败，下一轮继续补；两轮之后仍失败的就不再纠缠
         if attempt == 1 and failed:
@@ -2428,7 +2555,10 @@ def build_command(src, opts, info, dst, pip=None):
     # 硬件解码只加在**视频**输入上（首图/主图是单张图，走硬解没意义还可能失败）。
     # 实测主合成阶段开不开硬解无差别，所以"自动"在这里不开，见 hw_decode_args。
     hw = hw_decode_args(opts.get("hwaccel"), HW_STAGE_MAIN)
-    cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
+    # -progress pipe:1：让 ffmpeg 把"已编码多少秒"逐行写到 stdout，界面据此显示
+    # 真实进度（解析见 _read_out_time）。日志仍在 stderr，两者互不干扰。
+    cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+           "-nostats", "-progress", "pipe:1"]
     cmd += hw + ["-i", src]
     cmd += ["-i", opts["cover"], "-i", opts["product"]]
     if pip:
@@ -2491,8 +2621,8 @@ def _pick_images(opts):
     挑中的文件名记在返回值的 picked_cover / picked_product 里，
     由调用方拼进"完成"那一行——这样每条视频只占一行日志，信息也不丢。
     """
-    covers = list_images(opts.get("cover"))
-    prods = list_images(opts.get("product"))
+    covers = opts.get("cover_files") or list_images(opts.get("cover"))
+    prods = opts.get("product_files") or list_images(opts.get("product"))
     if not covers or not prods:
         return opts
 
@@ -2516,7 +2646,72 @@ def _safe_probe(path):
         return None
 
 
-def process_one(src, out_dir, opts, registry, log, tag=""):
+class VideoProgress:
+    """
+    把一条视频**各阶段的真实完成量**折算成 0~1 的总完成度，供进度条使用。
+
+    这里刻意不做"按时间猜"的平滑动画：只有真的干完了一步，进度才往前走。
+    所以进度条不会跑在事实前面，任务卡住时也不会自己偷偷往前爬。
+
+    三个阶段的完成量全部是实测数字，没有一个估计值：
+        副本   —— prepare_small_pool 报的「已生成 / 需生成」个数
+        画中画 —— _encode_pip_batches 报的「已完成批数 / 总批数」
+        合成   —— ffmpeg 用 -progress 自己报的 out_time / 成片时长
+    阶段之间按经验耗时占比加权（合成最重）；没开画中画时只剩合成一个阶段，
+    权重自动归一，不会在开头留出一段走不动的空档。
+    """
+
+    _PIP_PLAN = (("copy", 0.15), ("pip", 0.25), ("compose", 0.60))
+    _PLAIN_PLAN = (("compose", 1.0),)
+
+    def __init__(self, emit, pip=True):
+        """
+        :param emit: 完成度回调（0~1），由界面侧换算成整批进度
+        :param pip : 这条视频是否要走画中画（决定阶段权重表）
+        """
+        self._emit = emit
+        self._plan = self._PIP_PLAN if pip else self._PLAIN_PLAN
+        self._frac = {name: 0.0 for name, _ in self._plan}
+        self._sent = -1.0
+
+    def phase(self, name, frac):
+        """记录某阶段的真实完成度；只增不减（并发下晚到的旧值不许把进度拽回去）"""
+        if name not in self._frac:
+            return
+        self._frac[name] = max(self._frac[name], min(1.0, max(0.0, float(frac))))
+        self._push()
+
+    def count(self, name, done, total):
+        """按个数记进度（副本数 / 批次数）；总数为 0 表示该阶段无事可做，直接算完成"""
+        self.phase(name, (float(done) / total) if total else 1.0)
+
+    def finish(self):
+        """收尾：把还没报满的阶段补到 100%（这条视频确实已经处理完了）"""
+        for name in self._frac:
+            self._frac[name] = 1.0
+        self._push()
+
+    def _push(self):
+        """完成度每变动 0.2% 才发一条消息，避免刷爆消息队列"""
+        total = sum(weight for _, weight in self._plan)
+        frac = sum(weight * self._frac[name] for name, weight in self._plan) / total
+        if frac - self._sent < 0.002 and frac < 1.0:
+            return
+        self._sent = frac
+        try:
+            self._emit(frac)
+        except Exception:
+            pass
+
+
+def _check_stopped(opts):
+    """停止后不再启动新转码，也不把取消当作坏素材重新编码。"""
+    event = opts.get("stop_event")
+    if event is not None and event.is_set():
+        raise CancelledError("处理已停止")
+
+
+def process_one(src, out_dir, opts, registry, log, tag="", on_progress=None):
     """
     处理单个视频：准备画中画轨 → 一次合成出片 → 输出到 out_dir。
 
@@ -2526,8 +2721,10 @@ def process_one(src, out_dir, opts, registry, log, tag=""):
 
     :param tag: 日志前缀（形如 "[x1.mp4]"）。多个视频并发时日志会交错，
                 每行都带文件名才不会看混。
+    :param on_progress: 真实完成度回调（0~1），由界面侧换算成整批进度；可空
     :return: 输出文件路径
     """
+    _check_stopped(opts)
     t0 = time.time()
     # 预检阶段已读过该视频的信息就直接复用，不必再调一次 ffprobe
     info = (opts.get("infos") or {}).get(src) or probe_media(src)
@@ -2539,49 +2736,62 @@ def process_one(src, out_dir, opts, registry, log, tag=""):
     if os.path.abspath(dst) == os.path.abspath(src):
         dst = os.path.join(out_dir, base + "_已处理" + out_ext)
 
+    # 真实进度：三个阶段各自用实测数字折算（见 VideoProgress），不猜时间
+    prog = VideoProgress(on_progress, pip=bool(opts.get("pip_dir"))) if on_progress else None
+
     # 本文件的所有日志都带文件名前缀，便于在并发日志里对号入座
     def say(msg, keep=True):
         """
         keep=True  → 写日志：结果 / 异常 / 需要用户知道的说明
-        keep=False → 只刷新窗口底部状态栏，不写日志：过程性提示，避免一行一行刷屏
+        keep=False → 只刷新窗口底部的进度值，不写日志：过程性提示，避免一行一行刷屏
         """
         if keep:
             log(f"{tag} {msg}" if tag else msg)
-        cb = opts.get("stage_cb")
-        if cb:
-            try:
-                cb(tag, msg)        # 让窗口底部的状态栏同步显示"现在在干什么"
-            except Exception:
-                pass
 
-    say(f"开始处理（时长 {fmt_duration(info['duration'])}）", keep=False)
     # 本条视频随机固定首图与主图：目录里有多张时每次抽一张，抽定后本条不再变
-    # （抽中的文件名会拼进最后的"完成"那一行，所以这里不再单独刷一行日志）
     opts = _pick_images(opts)
     opts = _clamp_prod_start(opts, info, say)      # 起始帧超出视频长度时自动退到最后一帧
+    picked = ""
+    if opts.get("picked_cover"):
+        picked = f"，首图 {opts['picked_cover']} · 主图 {opts['picked_product']}"
+    say(f"开始处理（时长 {fmt_duration(info['duration'])}{picked}）")
 
     tmpdir, pip = None, None
     try:
         if opts.get("pip_dir"):
             tmpdir = tempfile.mkdtemp(prefix=".pip_", dir=out_dir)
             try:
-                pip = build_pip_track(info, opts, tmpdir, registry, say)
+                pip = build_pip_track(info, opts, tmpdir, registry,
+                                      lambda msg: say(msg), prog)
             except Exception as e:
+                _check_stopped(opts)
                 say(f"画中画没做成，这条视频就不加画中画了（原因：{e}）")
                 pip = None
+        if prog is not None:
+            # 副本与画中画都已就绪（没开画中画时这两个阶段不在计划里，调了也不影响）
+            prog.phase("copy", 1.0)
+            prog.phase("pip", 1.0)
 
+        _check_stopped(opts)
         say("正在合成画面（最耗时的一步，请稍候）…", keep=False)
         cmd, tw, th = build_command(src, opts, info, dst, pip)
-        _run(cmd, registry)
+        # 合成阶段的进度由 ffmpeg 自己汇报（build_command 里加了 -progress pipe:1）
+        _run(cmd, registry,
+             on_progress=(lambda frac: prog.phase("compose", frac)) if prog else None,
+             expected_dur=float(info.get("duration") or 0.0))
+        if prog is not None:
+            prog.finish()
     finally:
         if tmpdir:                     # 无论成功失败都清理临时片段，避免堆积
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # 每个视频只留这一行结果：耗时 + 这一条抽到的那两张图（30 个视频就是 30 行）
-    picked = ""
-    if opts.get("picked_cover"):
-        picked = f"（首图 {opts['picked_cover']} · 主图 {opts['picked_product']}）"
-    say(f"✓ 完成，用时 {fmt_duration(time.time() - t0)}{picked}")
+    # 每个视频只留这两行结果：开始处理（含抽到的图）、完成（耗时 + 成品体积）
+    size = 0
+    try:
+        size = os.path.getsize(dst)
+    except OSError:
+        pass
+    say(f"✓ 完成，用时 {fmt_duration(time.time() - t0)}，输出 {fmt_bytes(size)}")
     return dst
 
 
@@ -2596,8 +2806,18 @@ class App(tk.Tk):
         super().__init__()
         # 标题栏只留工具名：界面里不再放标题行（用户要求去掉，见 _build_ui 说明）
         self.title("短视频批处理工具")
-        self.geometry("920x820")
-        self.minsize(880, 700)
+        # 窗口尺寸按屏幕可用空间自适应，并居中偏上放置。
+        # 写死 1080x880 在 13 寸屏上会被菜单栏 / Dock 切掉底部（用户反馈"没显示全"），
+        # 所以取屏幕尺寸留出边距后再夹到目标范围内，最小尺寸也跟着一起收。
+        try:
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        except Exception:
+            sw, sh = 1440, 900
+        width = max(860, min(1080, sw - 80))
+        # 高度下限 680 是实测出来的：再矮日志区就不足 40px（见 test_video_frame_tool.py --ui）
+        height = max(680, min(880, sh - 150))     # 150 ≈ 菜单栏 + Dock + 标题栏 + 边距
+        self.geometry(f"{width}x{height}+{max(0, (sw - width) // 2)}+{max(24, (sh - height) // 3)}")
+        self.minsize(min(860, width), min(680, height))
 
         # ---- 窗口图标（任务栏 / 标题栏 / Dock）----
         # 用内嵌 logo，不依赖外部文件；自定义 logo.png 会被优先采用，见 load_logo()
@@ -2641,7 +2861,6 @@ class App(tk.Tk):
 
         # ---- 随机化 ----
         self.rnd_flip_h = tk.BooleanVar(value=bool(sr.get("flip_h", True)))
-        self.rnd_flip_v = tk.BooleanVar(value=bool(sr.get("flip_v", False)))
         self.rnd_zoom = tk.StringVar(value=str(sr.get("zoom", "1.06")))
         self.rnd_color = tk.BooleanVar(value=bool(sr.get("color", True)))
         self.rnd_jitter = tk.StringVar(value=str(sr.get("jitter", "3")))
@@ -2667,9 +2886,21 @@ class App(tk.Tk):
         # ---- 运行时状态 ----
         self.msg_q = queue.Queue()             # 工作线程 → 主线程的消息队列
         self.registry = ProcRegistry()         # 在跑的 ffmpeg 进程
+        self.warm_stop_event = threading.Event()  # 后台预热独立取消，前台开始时让路
         self.stop_event = threading.Event()    # 停止信号
         self.running = False
         self._poll_id = None                   # 消息泵定时器 id（关闭窗口时取消）
+
+        # ---- 进度条状态：只装"真实发生过的工作量"，不做任何猜测 ----
+        # 权重 = 该视频时长（耗时基本正比于时长，所以按秒数加权才准）；
+        # 完成量 = 该视频内部各阶段的真实完成度（见 VideoProgress）。
+        # 界面上的百分比 = 已完成工作量 / 全部工作量，只有真干完活才会往前走。
+        self._v_weights = []                   # 每条视频的权重（时长秒；读不到时给 1）
+        self._v_done = {}                      # 序号 -> 已完成工作量
+        self._v_total = 0.0                    # 全部工作量
+        self._v_dirty = False                  # 本轮是否有新的进度消息要落到进度条
+        self._batch_done = 0                   # 预生成副本：已生成个数
+        self._batch_total = 0                  # 预生成副本：总个数
 
         # ---- 系统资源监控（CPU / 内存 / 本进程占用，跨平台实现见 SystemMonitor） ----
         self.monitor = SystemMonitor()
@@ -2680,6 +2911,25 @@ class App(tk.Tk):
         self._poll_id = self.after(120, self._poll_queue)   # 启动消息泵（记录 id 便于关闭时取消）
         self._mon_id = self.after(MONITOR_INTERVAL_MS, self._tick_monitor)   # 启动资源监控
         self._check_env()
+        self.after_idle(self._present_window)
+
+    def _present_window(self):
+        """启动后将窗口带到前台；macOS 下也尝试激活 Python 应用本身。"""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.attributes("-topmost", True)
+            self.after(180, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
+        if IS_MACOS:
+            try:
+                subprocess.Popen(
+                    ["osascript", "-e", 'tell application "Python" to activate'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
 
     # ---------------------------------------------------- 配置持久化
     def _snapshot(self):
@@ -2714,7 +2964,7 @@ class App(tk.Tk):
                 "small": bool(self.settings.get("pip", {}).get("small", True)),
             },
             "random": {
-                "flip_h": bool(self.rnd_flip_h.get()), "flip_v": bool(self.rnd_flip_v.get()),
+                "flip_h": bool(self.rnd_flip_h.get()),
                 "zoom": self.rnd_zoom.get(), "color": bool(self.rnd_color.get()),
                 "jitter": self.rnd_jitter.get(),
             },
@@ -2734,6 +2984,9 @@ class App(tk.Tk):
     def _on_close(self):
         """关闭窗口：先取消定时器、保存配置，再销毁窗口"""
         self._save_settings()
+        self.warm_stop_event.set()
+        self.stop_event.set()
+        self.registry.kill_all()
         for attr in ("_poll_id", "_mon_id"):
             try:
                 tid = getattr(self, attr, None)
@@ -2746,18 +2999,39 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------------- UI
     def _build_ui(self):
-        pad = {"padx": 8, "pady": 4}
+        # 保留系统原生按钮、下拉框与勾选框，避免跨平台主题退化为凸起方框。
+        style = ttk.Style(self)
+        if PLATFORM == "macos" and "aqua" in style.theme_names():
+            style.theme_use("aqua")
+        # 字号一律跟随系统默认（TkDefaultFont），不手动放大——只在默认字号上加粗。
+        # 手动指定字号会盖掉系统设置（用户开大字体时界面反而不跟随），也容易整体偏大。
+        default_font = tkfont.nametofont("TkDefaultFont")
+        family = default_font.actual("family")
+        size = default_font.actual("size")
+        style.configure("Section.TLabel", font=(family, size, "bold"))
+        style.configure("Status.TLabel", font=(family, size, "bold"))
+        style.configure("Muted.TLabel", foreground="#647080")
+
+        pad = {"padx": 6, "pady": 2}
         root = ttk.Frame(self)
-        root.pack(fill="both", expand=True, padx=12, pady=10)
+        root.pack(fill="both", expand=True, padx=20, pady=12)
         root.columnconfigure(0, weight=1)
 
+        def section(row, title):
+            """用标题和留白分组，避免大面积描边压过实际内容。"""
+            outer = ttk.Frame(root)
+            outer.grid(row=row, column=0, sticky="nsew", pady=(0 if row == 0 else 16, 0))
+            ttk.Label(outer, text=title, style="Section.TLabel").pack(anchor="w", pady=(0, 8))
+            body = ttk.Frame(outer)
+            body.pack(fill="both", expand=True)
+            return body
+
         # ---------- 0. 路径区 ----------
-        f_path = ttk.LabelFrame(root, text=" 素材路径 ")
-        f_path.grid(row=0, column=0, sticky="ew")
+        f_path = section(0, "素材路径")
         f_path.columnconfigure(1, weight=1)
 
         def path_row(r, label, var, cb):
-            ttk.Label(f_path, text=label, width=10, anchor="e").grid(row=r, column=0, sticky="e", **pad)
+            ttk.Label(f_path, text=label, width=10, anchor="w").grid(row=r, column=0, sticky="e", **pad)
             ttk.Entry(f_path, textvariable=var).grid(row=r, column=1, sticky="ew", **pad)
             ttk.Button(f_path, text="选择…", command=cb, width=9).grid(row=r, column=2, **pad)
 
@@ -2768,11 +3042,11 @@ class App(tk.Tk):
         path_row(1, "主图目录", self.product_var,
                  lambda: self._pick_dir(self.product_var, "选择主图目录（每条视频随机取一张）"))
         path_row(2, "视频目录", self.dir_var, lambda: self._pick_dir(None, "选择视频目录"))
-        path_row(3, "小视频目录", self.pip_var, lambda: self._pick_dir(self.pip_var, "选择画中画小视频目录"))
+        path_row(3, "画中画目录", self.pip_var, lambda: self._pick_dir(self.pip_var, "选择画中画目录"))
 
         # ---------- 1. 画中画设置区 ----------
-        f_pip = ttk.LabelFrame(root, text=" 画中画设置（小视频目录留空则不启用） ")
-        f_pip.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        f_pip = section(1, "画中画设置")
+        ttk.Label(f_pip, text="画中画目录留空时不启用", style="Muted.TLabel").pack(anchor="w", padx=8, pady=(0, 6))
 
         # 2.1 位置与尺寸
         r1 = ttk.Frame(f_pip)
@@ -2806,7 +3080,6 @@ class App(tk.Tk):
         r3.pack(fill="x", padx=8, pady=(2, 6))
         ttk.Label(r3, text="随机化　：").pack(side="left")
         ttk.Checkbutton(r3, text="水平翻转", variable=self.rnd_flip_h).pack(side="left", padx=(4, 0))
-        ttk.Checkbutton(r3, text="垂直翻转", variable=self.rnd_flip_v).pack(side="left", padx=(8, 0))
         ttk.Checkbutton(r3, text="随机调色", variable=self.rnd_color).pack(side="left", padx=(8, 0))
         ttk.Label(r3, text="随机缩放上限").pack(side="left", padx=(8, 2))
         ttk.Entry(r3, width=5, textvariable=self.rnd_zoom).pack(side="left")
@@ -2814,81 +3087,84 @@ class App(tk.Tk):
         ttk.Entry(r3, width=4, textvariable=self.rnd_jitter).pack(side="left")
         ttk.Label(r3, text="px").pack(side="left")
 
-        # 2.4 硬件加速（只加速解码，且只在该用的阶段用；理由见 hw_decode_args 实测表）
-        r4 = ttk.Frame(f_pip)
-        r4.pack(fill="x", padx=8, pady=(0, 6))
-        ttk.Label(r4, text="硬件加速：").pack(side="left")
-        ttk.Combobox(r4, width=6, state="readonly", textvariable=self.hwaccel_var,
-                     values=HWACCEL_MODES).pack(side="left", padx=(4, 10))
-        ttk.Label(r4, text="只加速解码，用在「生成低清副本」这一步（实测快 26%）；"
-                           "其它阶段与硬件编码实测都没收益，故不启用",
-                  foreground="#666").pack(side="left")
+        cache_bar = ttk.Frame(f_pip)
+        cache_bar.pack(fill="x", padx=8, pady=(8, 0))
+        self.btn_prep = ttk.Button(cache_bar, text="预生成低清副本", command=self._prepare_small)
+        self.btn_prep.pack(side="left")
+        ttk.Button(cache_bar, text="打开副本目录", command=self._open_small).pack(side="left", padx=8)
+        ttk.Label(cache_bar, text="副本自动复用，无需每次生成", style="Muted.TLabel").pack(side="left", padx=8)
 
         # ---------- 2. 运行参数区 ----------
-        f_run = ttk.Frame(root)
-        f_run.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(f_run, text="并发线程数").pack(side="left")
-        ttk.Spinbox(f_run, from_=1, to=32, width=5,
+        f_run = section(2, "输出设置")
+        run_options = ttk.Frame(f_run)
+        run_options.pack(fill="x")
+        ttk.Label(run_options, text="同时处理").pack(side="left")
+        ttk.Spinbox(run_options, from_=1, to=32, width=5,
                     textvariable=self.workers_var).pack(side="left", padx=(6, 18))
-        ttk.Label(f_run, text="编码速度").pack(side="left")
-        ttk.Combobox(f_run, width=7, state="readonly", textvariable=self.preset_var,
+        ttk.Label(run_options, text="编码速度").pack(side="left")
+        ttk.Combobox(run_options, width=7, state="readonly", textvariable=self.preset_var,
                      values=tuple(PRESET_MAP.keys())).pack(side="left", padx=(6, 16))
         # 产品图起始帧：默认第 60 帧（填 0 表示从第一帧就显示）
-        ttk.Label(f_run, text="产品图从第").pack(side="left")
-        ttk.Spinbox(f_run, from_=0, to=PRODUCT_START_MAX, width=6,
+        ttk.Label(run_options, text="主图从第").pack(side="left")
+        ttk.Spinbox(run_options, from_=0, to=PRODUCT_START_MAX, width=6,
                     textvariable=self.prod_start_var).pack(side="left", padx=(4, 2))
-        ttk.Label(f_run, text="帧开始显示").pack(side="left", padx=(0, 16))
+        ttk.Label(run_options, text="帧开始显示").pack(side="left", padx=(0, 16))
 
-        ttk.Label(f_run, text="输出：").pack(side="left")
-        ttk.Label(f_run, textvariable=self.out_var, foreground="#0a6").pack(side="left")
+        ttk.Label(run_options, text="硬件解码").pack(side="left", padx=(8, 6))
+        ttk.Combobox(run_options, width=6, state="readonly", textvariable=self.hwaccel_var,
+                     values=HWACCEL_MODES).pack(side="left")
+        output_row = ttk.Frame(f_run)
+        output_row.pack(fill="x", pady=(12, 0))
+        ttk.Label(output_row, text="输出目录", style="Muted.TLabel").pack(side="left", padx=(0, 12))
+        ttk.Entry(output_row, textvariable=self.out_var, state="readonly").pack(side="left", fill="x", expand=True)
+        self.btn_open = ttk.Button(output_row, text="打开目录", command=self._open_out)
+        self.btn_open.pack(side="left", padx=(8, 0))
 
         bar = ttk.Frame(root)
-        bar.grid(row=3, column=0, sticky="ew", pady=(8, 0))
-        self.btn_start = ttk.Button(bar, text="开始处理", command=self._start)
+        bar.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self.btn_start = ttk.Button(bar, text="开始处理", command=self._start, default="active", width=12)
         self.btn_start.pack(side="left")
         self.btn_stop = ttk.Button(bar, text="停止", command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=8)
-        self.btn_open = ttk.Button(bar, text="打开输出目录", command=self._open_out)
-        self.btn_open.pack(side="left", padx=8)
-        # 提前把低清副本建好：副本会长期保留，跑过一次之后这里基本是"已就绪"。
-        # 换过素材目录 / 调过画中画尺寸时点一下，下次处理就不用等这一步了。
-        self.btn_prep = ttk.Button(bar, text="预生成低清副本", command=self._prepare_small)
-        self.btn_prep.pack(side="left", padx=8)
 
-        # ---------- 3. 进度 / 状态 + 系统资源监控 ----------
-        self.progress = ttk.Progressbar(root, mode="determinate")
-        self.progress.grid(row=4, column=0, sticky="ew", pady=(8, 2))
-
-        f_stat = ttk.Frame(root)
-        f_stat.grid(row=5, column=0, sticky="ew")
-        self.status = ttk.Label(f_stat, text="就绪")
-        self.status.pack(side="left")
-
-        # 右侧资源监控：CPU% / 内存占用 / 本工具自身内存，每秒刷新（见 _tick_monitor）
-        f_mon = ttk.Frame(f_stat)
+        # 系统资源监控挤在按钮这一行的右侧（用户要求：不要为它单独占一整行）
+        f_mon = ttk.Frame(bar)
         f_mon.pack(side="right")
-        ttk.Label(f_mon, text="CPU").pack(side="left")
-        self.mon_cpu = ttk.Progressbar(f_mon, mode="determinate", maximum=100, length=70)
+        ttk.Label(f_mon, text="整机 CPU", style="Muted.TLabel").pack(side="left")
+        self.mon_cpu = ttk.Progressbar(f_mon, mode="determinate", maximum=100, length=60)
         self.mon_cpu.pack(side="left", padx=(4, 4))
         self.mon_cpu_text = ttk.Label(f_mon, text="—", width=5, anchor="e")
         self.mon_cpu_text.pack(side="left")
 
-        ttk.Label(f_mon, text="内存").pack(side="left", padx=(14, 0))
-        self.mon_mem = ttk.Progressbar(f_mon, mode="determinate", maximum=100, length=70)
+        ttk.Label(f_mon, text="整机内存", style="Muted.TLabel").pack(side="left", padx=(14, 0))
+        self.mon_mem = ttk.Progressbar(f_mon, mode="determinate", maximum=100, length=60)
         self.mon_mem.pack(side="left", padx=(4, 4))
-        self.mon_mem_text = ttk.Label(f_mon, text="—")
+        # 内存这串长度会随数值变（"9.9/24.0 GiB" → "19.5/128.0 GiB"），
+        # 所以**不能给固定字符宽**——宽了会把后半段直接裁掉（用户反馈过"内存大小有变被盖着了"）。
+        # 不设 width 让它按内容自适应；整块是靠右摆放，变宽只会往左推，不会挤到按钮。
+        self.mon_mem_text = ttk.Label(f_mon, text="—", anchor="e")
         self.mon_mem_text.pack(side="left")
 
-        self.mon_proc_text = ttk.Label(f_mon, text="", foreground="#666")
-        self.mon_proc_text.pack(side="left", padx=(14, 0))
+        # ---------- 3. 总进度 ----------
+        # 一整行只放两样东西：长进度条 + 右边一个大概的进度值。
+        # 细节（第几个视频、正在做什么、成功失败各几个）一律写日志，不在这里堆
+        # ——用户明确要求这个位置"只用显示一个大概的进度值"。
+        f_prog = ttk.Frame(root)
+        f_prog.grid(row=4, column=0, sticky="ew", pady=(10, 8))
+        f_prog.columnconfigure(0, weight=1)
+        self.progress = ttk.Progressbar(f_prog, mode="determinate")
+        self.progress.grid(row=0, column=0, sticky="ew")
+        self.progress_text = ttk.Label(f_prog, text="就绪", width=12, anchor="e",
+                                       style="Status.TLabel")
+        self.progress_text.grid(row=0, column=1, sticky="e", padx=(12, 0))
 
-        f_log = ttk.Frame(root)
-        f_log.grid(row=6, column=0, sticky="nsew", pady=(4, 0))
-        root.rowconfigure(6, weight=1)   # 日志区占据剩余空间
+        f_log = section(5, "处理结果与异常")
+        root.rowconfigure(5, weight=1)   # 结果区只用剩余空间，主进度保持可见
         f_log.columnconfigure(0, weight=1)
         f_log.rowconfigure(0, weight=1)
-        # 等宽字体按平台选择：Windows=Consolas / macOS=Menlo / Linux=DejaVu Sans Mono
-        self.log_box = tk.Text(f_log, height=16, wrap="none", font=(mono_font_family(), 11))
+        # 结果区使用系统字体与自动换行，避免错误信息横向截断。
+        self.log_box = tk.Text(f_log, height=5, wrap="word", font=(mono_font_family(), 11), relief="flat", borderwidth=0,
+                               padx=8, pady=8)
         self.log_box.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(f_log, orient="vertical", command=self.log_box.yview)
         sb.grid(row=0, column=1, sticky="ns")
@@ -2903,39 +3179,15 @@ class App(tk.Tk):
             self._log("     Linux  ：sudo apt install ffmpeg")
             self._log("     通用兜底：pip install imageio-ffmpeg")
             self.btn_start.configure(state="disabled")
+            self.btn_prep.configure(state="disabled")
             return
 
-        self._log("工具已就绪。选好素材后点「开始处理」即可。")
-        self._log(f"这台电脑有 {CPU_COUNT} 个 CPU 核心，程序会按同时处理的视频数量自动分配，"
-                  f"不会把所有核心一次占满。")
-
-        # 回填的路径若已不存在，只提示不阻断（用户可能换了磁盘或改了名）
-        stale = []
-        for label, path, is_dir in (("首图目录", self.cover_var.get(), True),
-                                    ("主图目录", self.product_var.get(), True),
-                                    ("视频目录", self.dir_var.get(), True),
-                                    ("小视频目录", self.pip_var.get(), True)):
-            if path and not os.path.isdir(path):
-                stale.append(f"{label}：{path}")
+        stale = [label for label, path in (
+            ("首图目录", self.cover_var.get()), ("主图目录", self.product_var.get()),
+            ("视频目录", self.dir_var.get()), ("画中画目录", self.pip_var.get()))
+            if path and not os.path.isdir(path)]
         if stale:
-            self._log("注意：下面这些上次用过的路径已经找不到了，请重新选择 → " + "；".join(stale))
-        else:
-            self._log("上次用过的素材都还在，可以直接开始。")
-
-        # 一打开就先看一眼低清副本：这部分只是数文件、不读内容，几乎不耗时，
-        # 但能让用户立刻知道"这次还用不用等"。已生成的副本会长期保留、直接复用。
-        pip_dir = self.pip_var.get().strip()
-        if pip_dir and os.path.isdir(pip_dir):
-            have, total, size = small_cache_stats(pip_dir)
-            if total and have >= total:
-                self._log(f"低清副本：{have}/{total} 个早已生成好了"
-                          f"（{fmt_bytes(size)}，会直接复用，本次不用等）")
-            elif have:
-                self._log(f"低清副本：已有 {have}/{total} 个（{fmt_bytes(size)}），"
-                          f"还差 {total - have} 个——首次处理时会顺手建好，之后一直复用。")
-            else:
-                self._log(f"低清副本：还没生成（共 {total} 个素材）。"
-                          f"首次处理会先建一次，之后一直复用；也可以点「预生成低清副本」提前建好。")
+            self._log("请重新选择不存在的路径：" + "、".join(stale))
 
     # ---------------------------------------------------------- 选择/打开
     # 每次选择完成后立刻落盘，"上次选择"就是这样被记住的。
@@ -2957,6 +3209,24 @@ class App(tk.Tk):
         elif not open_folder(d):
             messagebox.showwarning("提示", f"无法自动打开目录，请手动前往：\n{d}")
 
+    def _open_small(self):
+        """打开当前小视频素材目录下的真实副本目录，不创建空缓存。"""
+        folder = self.pip_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showinfo("副本目录", "请先选择有效的画中画目录。")
+            return
+        path = small_dir_of(folder)
+        if not os.path.isdir(path):
+            messagebox.showinfo("副本尚未生成", f"生成后将保存在：\n{path}")
+        elif not open_folder(path):
+            messagebox.showwarning("副本目录", f"无法自动打开，请手动前往：\n{path}")
+
+    def _clear_log(self):
+        """每批只展示本次结果，避免历史消息挤占进度区域。"""
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+
     # -------------------------------------------------- 预生成低清副本
     def _prepare_small(self):
         """
@@ -2970,7 +3240,7 @@ class App(tk.Tk):
         pip_dir = self.pip_var.get().strip()
         vdir = self.dir_var.get().strip()
         if not pip_dir or not os.path.isdir(pip_dir):
-            messagebox.showwarning("路径无效", f"小视频目录不存在：{pip_dir or '（未选择）'}")
+            messagebox.showwarning("路径无效", f"画中画目录不存在：{pip_dir or '（未选择）'}")
             return
         # 副本尺寸要按主视频算，所以需要视频目录里至少有一个视频
         files = _list_videos(vdir) if vdir and os.path.isdir(vdir) else []
@@ -2980,14 +3250,19 @@ class App(tk.Tk):
             return
 
         opts = self._collect_opts()
-        opts["stage_cb"] = self._stage_cb
+        self.warm_stop_event.set()
+        self._clear_log()
         self.running = True
         self.stop_event.clear()
-        self.btn_start.configure(state="disabled")
+        self.btn_start.configure(state="disabled", text="处理中…")
         self.btn_prep.configure(state="disabled")
-        self.btn_stop.configure(state="normal")
-        self.status.configure(text="正在准备…")
-        self.progress.configure(maximum=max(1, len(files)), value=0)
+        self.btn_stop.configure(state="normal", text="停止")
+        self._set_progress_text("准备中…")
+        # 预生成走的是"副本个数"这条真实计数，与主流程的时长权重互不干扰
+        self._v_weights, self._v_done, self._v_total = [], {}, 0.0
+        self._batch_done = self._batch_total = 0
+        self.progress.configure(maximum=100, value=0)
+        self._log(f"预生成低清副本：视频目录 {vdir}，画中画素材目录 {opts['pip_dir']}")
         threading.Thread(target=self._small_worker,
                          args=(vdir, files, opts), daemon=True).start()
 
@@ -2995,41 +3270,29 @@ class App(tk.Tk):
         """后台线程：读出最大视频的尺寸 → 按它算副本短边 → 把整池副本建齐"""
         t0 = time.time()
         try:
-            self._log("=" * 72)
-            self._log("预生成低清副本：把画中画素材提前降成小尺寸，"
-                      "以后处理视频就不用再等这一步（副本会一直留着复用）。")
             # 尺寸按"最大的一条视频"算：短边宁可大一点，算小了下次还得重建
-            self.msg_q.put(("status", "正在读取视频信息…"))
             biggest = None
             with ThreadPoolExecutor(max_workers=min(8, len(files))) as ex:
                 for info in ex.map(_safe_probe, files):
                     if not info:
                         continue
-                    if biggest is None or (info["width"] * info["height"]
-                                           > biggest["width"] * biggest["height"]):
+                    if biggest is None or (_small_short_side(info["width"], info["height"], opts)
+                                           > _small_short_side(biggest["width"], biggest["height"], opts)):
                         biggest = info
             if biggest is None:
-                self._log_q("✗ 视频目录里没有能读出来的视频，已取消。")
-                return
+                raise RuntimeError("视频目录里没有能读出来的视频")
             short = _small_short_side(biggest["width"], biggest["height"], opts)
-            have, total, size = small_cache_stats(opts["pip_dir"])
-            self._log_q(f"素材 {total} 个，已有副本 {have} 个（{fmt_bytes(size)}）。"
-                        f"按最大视频 {biggest['width']}x{biggest['height']} 计算，"
-                        f"副本短边 {short} 像素。")
-
-            pool = scan_pip_pool(opts["pip_dir"], self._log_q)
+            pool = scan_pip_pool(opts["pip_dir"])
             if not pool:
-                self._log_q(f"✗ 小视频目录里没有可用素材：{opts['pip_dir']}")
-                return
+                raise RuntimeError(f"画中画目录里没有可用素材：{opts['pip_dir']}")
 
             self.msg_q.put(("total", len(pool)))
 
             def tick(n, m):
-                # 进度只走进度条与状态栏，不刷日志（用户要求不要一行一行显示）
-                self.msg_q.put(("tick", None))
-                self.msg_q.put(("status", f"正在预生成低清副本 {n}/{m}"))
+                # 进度只走进度条与右侧进度值，不刷日志（这一格用户要求"只看一个大概的数"）
+                self.msg_q.put(("progress", (n, m)))
 
-            got = prepare_small_pool(pool, short, self._log_q, self.stop_event,
+            got = prepare_small_pool(pool, short, None, self.stop_event,
                                      hw=opts.get("hwaccel"), progress_cb=tick) or {}
             have2 = len(got)
             self.msg_q.put(("small_done",
@@ -3041,27 +3304,23 @@ class App(tk.Tk):
         """预生成结束（成功）后的收尾"""
         have, total, cost = payload
         self.running = False
-        self.btn_start.configure(state="normal")
+        self.btn_start.configure(state="normal", text="开始处理")
         self.btn_prep.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self.progress.configure(value=0)
-        state = "已停止" if self.stop_event.is_set() else "已完成"
-        self.status.configure(text=f"{state}：低清副本 {have}/{total} 个就绪")
+        self.btn_stop.configure(state="disabled", text="已完成")
+        self._draw_progress(self._percent(have, total))
+        state = "已停止" if self.stop_event.is_set() else ("已完成" if have == total else "部分完成")
+        self._set_progress_text(f"副本 {have}/{total}")
         self._log(f"—— 预生成{state}：低清副本 {have}/{total} 个就绪，"
                   f"用时 {fmt_duration(cost)} ——")
-        if have >= total:
-            self._log("整池副本都已生成，之后处理视频会直接调用，不用再等这一步。")
-        else:
-            self._log("还有副本没建完，下次点「开始处理」或再点一次本按钮会接着补。")
 
     def _finish_small_error(self, msg):
         """预生成出错时的收尾（不弹窗打断，只写日志并恢复按钮）"""
         self.running = False
-        self.btn_start.configure(state="normal")
+        self.btn_start.configure(state="normal", text="开始处理")
         self.btn_prep.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self.progress.configure(value=0)
-        self.status.configure(text="预生成失败")
+        self.btn_stop.configure(state="disabled", text="停止")
+        self._draw_progress(0.0)
+        self._set_progress_text("预生成失败")
         self._log(f"✗ 预生成低清副本失败：{msg}")
 
     # ------------------------------------------------------------ 日志
@@ -3096,20 +3355,38 @@ class App(tk.Tk):
     def _poll_queue(self):
         """
         主线程消息泵：每 120ms 收一次工作线程的消息。
-        日志合批插入，进度条只在整数变化时刷新，确保界面不卡。
+
+        进度条**只吃真实数字**，不做任何估算：
+          · 主流程   —— ("vtotal") 给出每条视频的权重（时长），
+                        ("vprogress") 给出"这条视频已完成的工作量"，
+                        百分比 = 已完成工作量 / 全部工作量（VideoProgress 算出来的）
+          · 预生成副本 —— ("total") + ("progress", 已完成个数, 总个数)，本身就是真实计数
+        日志仍然合批插入，界面不会被高频消息拖慢。
         """
         logs, done, small, small_err = [], None, None, None
+        small_count, v_dirty = None, False
         try:
             while True:
                 kind, payload = self.msg_q.get_nowait()
                 if kind == "log":
                     logs.append(payload)
+                elif kind == "vtotal":
+                    # 权重按视频时长分配：耗时基本正比于时长，按秒数加权才准
+                    self._v_weights, self._v_total = payload
+                    self._v_done = {}
+                    self.progress.configure(mode="determinate", maximum=100, value=0)
+                elif kind == "vprogress":
+                    idx, work = payload
+                    self._v_done[idx] = max(self._v_done.get(idx, 0.0), float(work))
+                    v_dirty = True
                 elif kind == "total":
-                    self.progress.configure(maximum=max(1, payload), value=0)
-                elif kind == "tick":
-                    self.progress.configure(value=self.progress["value"] + 1)
-                elif kind == "status":
-                    self.status.configure(text=payload)
+                    self._batch_total = payload
+                    self._batch_done = 0
+                    self.progress.configure(mode="determinate", maximum=100, value=0)
+                elif kind == "progress":
+                    self._batch_done = payload[0]
+                    self._batch_total = payload[1]
+                    small_count = self._percent(payload[0], payload[1])
                 elif kind == "error":
                     self._finish_error(payload)
                 elif kind == "done":
@@ -3120,6 +3397,10 @@ class App(tk.Tk):
                     small_err = payload
         except queue.Empty:
             pass
+        if v_dirty:
+            self._draw_progress(self._v_percent())
+        elif small_count is not None:
+            self._draw_progress(small_count)
         self._log_batch(logs)
         if done:
             self._finish(done)
@@ -3128,6 +3409,31 @@ class App(tk.Tk):
         if small_err:
             self._finish_small_error(small_err)
         self._poll_id = self.after(120, self._poll_queue)
+
+    # -------------------------------------------------------- 进度显示
+    @staticmethod
+    def _percent(done, total):
+        """已完成 / 总数 → 百分比（分母为 0 时按 0 算，绝不抛异常）"""
+        return 100.0 * float(done) / float(total) if total else 0.0
+
+    def _v_percent(self):
+        """主流程的真实百分比：已完成工作量 / 全部工作量"""
+        return self._percent(sum(self._v_done.values()), self._v_total)
+
+    def _draw_progress(self, percent):
+        """
+        进度条 + 右侧那个大概的进度值。
+
+        数值本身只增不减（VideoProgress 逐条只报增量、已完成量只累加），
+        所以这里不会再出现"进度条往回缩"的观感问题。
+        """
+        pct = max(0.0, min(100.0, float(percent)))
+        self.progress.configure(mode="determinate", maximum=100, value=pct)
+        self.progress_text.configure(text=f"{pct:.0f}%")
+
+    def _set_progress_text(self, text):
+        """右侧进度值区在不跑任务时显示一个短状态词（细节一律写日志）"""
+        self.progress_text.configure(text=text)
 
     # ------------------------------------------------------------ 参数
     def _num(self, var, default, lo, hi):
@@ -3164,7 +3470,6 @@ class App(tk.Tk):
             "pip_speed": self._num(self.pip_speed, 1.2, 0.25, 4.0),
             # 随机化
             "rnd_flip_h": self.rnd_flip_h.get(),
-            "rnd_flip_v": self.rnd_flip_v.get(),
             "rnd_zoom": self._num(self.rnd_zoom, 1.0, 1.0, 1.30),
             "rnd_color": self.rnd_color.get(),
             "rnd_jitter": int(self._num(self.rnd_jitter, 0, 0, 20)),
@@ -3184,8 +3489,9 @@ class App(tk.Tk):
     # ------------------------------------------------------------ 主流程
     def _start(self):
         """点击"开始处理"：校验参数 → 收集文件 → 起 worker 线程"""
+        if self.running:
+            return
         opts = self._collect_opts()
-        opts["stage_cb"] = self._stage_cb     # 让底部状态栏跟着处理进度走
         vdir = self.dir_var.get().strip()
 
         # ---- 参数校验 ----
@@ -3194,28 +3500,31 @@ class App(tk.Tk):
             return
         # 首图 / 主图允许给目录（每条视频从里面随机取一张），也兼容以前的单个文件
         for label, key in (("首图目录", "cover"), ("主图目录", "product")):
-            if not list_images(opts[key]):
+            opts[key + "_files"] = list_images(opts[key])
+            if not opts[key + "_files"]:
                 messagebox.showwarning(
                     "缺少参数",
                     f"{label}里没有找到可用的图片：{opts[key] or '（未选择）'}")
                 return
         if opts["pip_dir"] and not os.path.isdir(opts["pip_dir"]):
-            messagebox.showwarning("路径无效", f"小视频目录不存在：{opts['pip_dir']}")
+            messagebox.showwarning("路径无效", f"画中画目录不存在：{opts['pip_dir']}")
             return
 
         try:
-            opts["prod_size"] = probe_image_size(list_images(opts["product"])[0])
+            opts["prod_size"] = probe_image_size(opts["product_files"][0])
         except Exception as e:
             messagebox.showerror("主图读取失败", str(e))
             return
 
         # ---- 立刻切到运行态：先给用户反馈，再去扫目录（扫描可能耗时） ----
+        self.warm_stop_event.set()
+        self._clear_log()
         self.running = True
         self.stop_event.clear()
-        self.btn_start.configure(state="disabled")
+        self.btn_start.configure(state="disabled", text="处理中…")
         self.btn_prep.configure(state="disabled")
-        self.btn_stop.configure(state="normal")
-        self.status.configure(text="正在准备…")
+        self.btn_stop.configure(state="normal", text="停止")
+        self._set_progress_text("准备中…")
 
         out_dir = os.path.join(vdir, "out")
         try:
@@ -3242,33 +3551,49 @@ class App(tk.Tk):
         # ---- 记录本次全部选择（下一次启动自动回填） ----
         self._save_settings()
 
-        self.progress.configure(value=0, maximum=len(files))
-        self._log("=" * 72)
-        self._log(f"开始处理：一共 {len(files)} 个视频，同时处理 {effective} 个。")
+        # ---- 进度条归零 + 把本次任务写清楚（进度条只吃真实数字，规模先摆出来） ----
+        self.progress.configure(mode="determinate", value=0, maximum=100)
+        self._v_weights, self._v_done, self._v_total = [], {}, 0.0
+        self._batch_done = self._batch_total = 0
+        self._set_progress_text("准备中…")
+
+        self._log(f"开始处理：{len(files)} 个视频，同时处理 {effective} 个"
+                  f"（每个分到 {opts['threads']} 个编码线程）")
+        self._log(f"视频目录：{vdir}")
         self._log(f"输出目录：{out_dir}")
         self._log(f"首图：从「{os.path.basename(opts['cover'])}」的 "
-                  f"{len(list_images(opts['cover']))} 张里，每条视频随机取一张"
-                  f"（同一条视频内固定不变）。")
-        self._log(f"主图：从「{os.path.basename(opts['product'])}」的 "
-                  f"{len(list_images(opts['product']))} 张里随机取一张，"
-                  f"从第 {opts['prod_start']} 帧起显示在画面中下方。")
-        if opts["pip_dir"]:
-            self._log(f"画中画：素材来自「{os.path.basename(opts['pip_dir'])}」目录，"
-                      f"放在右上角，播放速度 {opts['pip_speed']:g} 倍，全程静音。")
+                  f"{len(opts['cover_files'])} 张里随机取一张；"
+                  f"主图：从「{os.path.basename(opts['product'])}」的 "
+                  f"{len(opts['product_files'])} 张里随机取一张，"
+                  f"从第 {opts['prod_start']} 帧起显示（同一条视频内固定不变）")
+        if opts.get("pip_dir"):
+            self._log(f"画中画：素材来自「{os.path.basename(opts['pip_dir'])}」，"
+                      f"占画面 {opts['pip_w'] * 100:.0f}% × {opts['pip_h'] * 100:.0f}%（右上角），"
+                      f"每段掐头去尾 {opts['pip_head'] * 100:.0f}% / {opts['pip_tail'] * 100:.0f}%、"
+                      f"加速 {opts['pip_speed']} 倍"
+                      + ("、素材不重复" if opts.get("pip_small") else ""))
         else:
-            self._log("画中画：未启用（小视频目录为空）。")
-        self._log("提示：处理过程中可以随时点「停止」，已完成的文件会保留。")
-        self._log("=" * 72)
+            self._log("画中画：未启用（画中画目录留空）")
+        self._log("抗查重随机化：" + "、".join(
+            [f"缩放 ≤{opts['rnd_zoom']}x"] +
+            (["水平翻转"] if opts["rnd_flip_h"] else []) +
+            (["随机调色"] if opts["rnd_color"] else []) +
+            ([f"位置抖动 ±{opts['rnd_jitter']}px"] if opts["rnd_jitter"] else [])))
+        self._log(f"编码：{self.preset_var.get()}（libx264 / CRF {CRF}，"
+                  f"硬件解码 {opts['hwaccel']}）")
+
+        # 本条日志之后，每个视频各写两行：开始处理 + 完成（见 process_one）
+        self._log("—— 开始处理，进度条按真实完成量推进 ——")
 
         threading.Thread(target=self._worker, args=(files, out_dir, opts), daemon=True).start()
 
     def _to_idle(self):
         """把界面恢复成"可以再次开始"的状态（参数校验失败 / 目录里没视频时用）"""
         self.running = False
-        self.btn_start.configure(state="normal")
+        self.btn_start.configure(state="normal", text="开始处理")
         self.btn_prep.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self.status.configure(text="就绪")
+        self.btn_stop.configure(state="disabled", text="停止")
+        self._set_progress_text("就绪")
 
     def _worker(self, files, out_dir, opts):
         """
@@ -3277,75 +3602,87 @@ class App(tk.Tk):
         - 每个视频的日志都带「[文件名]」前缀，并发交错时也能一眼看出是哪个文件
         - 单个文件失败只记一行，不影响其它文件
         - 收到停止信号后不再启动新任务（正在跑的 ffmpeg 已被终止，会很快退出）
+
+        进度：每条视频按**时长**分配权重（耗时基本正比于时长，按个数平均分
+        会让长视频严重欠报），再用 VideoProgress 报回来它自己的真实完成度。
+        所以百分比是"已完成工作量 / 全部工作量"，不是"第几个 / 一共几个"。
         """
         ok = fail = 0
+        out_size = 0
         total = len(files)
         t0 = time.time()
-        self.msg_q.put(("total", total))
 
         # ---- 阶段 0：先把所有视频的信息读出来（几十毫秒级），再动手干重活 ----
         # 顺序很重要：读信息很轻，拼画中画 / 合成成片才吃 CPU。
         # 先把"这次要做多少活"摆到用户面前，点完开始就不会一片空白地干等。
-        self.msg_q.put(("status", "正在读取视频信息…"))
         infos = {}
         try:
             with ThreadPoolExecutor(max_workers=min(8, total)) as ex:
                 for path, res in zip(files, ex.map(_safe_probe, files)):
                     if res:
                         infos[path] = res
-            if infos:
-                # 只报一行汇总——逐个视频列清单会刷掉一整屏，用户明确要求不要一行一行显示
-                tt = sum(i["duration"] for i in infos.values())
-                self._log_q(f"待处理 {len(infos)} 个视频，总时长 {fmt_duration(tt)}"
-                            f"（平均 {fmt_duration(tt / len(infos))}）")
         except Exception:
             pass
         opts["infos"] = infos          # 下游直接复用，省掉重复探测
-        self.msg_q.put(("status", "准备开始处理…"))
+
+        # 权重=时长；读不到时长的按 1 秒算，保证它至少也算一份工作量
+        weights = [float((infos.get(f) or {}).get("duration") or 0.0) or 1.0 for f in files]
+        self.msg_q.put(("vtotal", (weights, sum(weights))))
+        if infos:
+            tt = sum(i["duration"] for i in infos.values())
+            self._log_q(f"共 {len(infos)} 个视频，总时长 {fmt_duration(tt)}"
+                        f"（平均 {fmt_duration(tt / len(infos))}）")
+
+        def reporter(idx):
+            """把第 idx 条视频的真实完成度换算成"整批已完成的工作量"丢进队列"""
+            def emit(frac):
+                self.msg_q.put(("vprogress", (idx, weights[idx] * frac)))
+            return emit
+
+        def run_one(idx, path):
+            _check_stopped(opts)
+            return process_one(path, out_dir, opts, self.registry, self._log_q,
+                               f"[{os.path.basename(path)}]", reporter(idx))
 
         with ThreadPoolExecutor(max_workers=max(1, min(opts["workers"], total))) as ex:
-            futures = {ex.submit(process_one, f, out_dir, opts, self.registry,
-                                 self._log_q, f"[{os.path.basename(f)}]"): f
-                       for f in files}
+            futures = {ex.submit(run_one, i, f): (i, f) for i, f in enumerate(files)}
             for fut in as_completed(futures):
-                if self.stop_event.is_set():
-                    ex.shutdown(wait=False, cancel_futures=True)
-                    break
-                name = os.path.basename(futures[fut])
+                idx, path = futures[fut]
+                name = os.path.basename(path)
                 try:
-                    fut.result()
+                    out = fut.result()
                     ok += 1
+                    try:
+                        out_size += os.path.getsize(out)
+                    except OSError:
+                        pass
+                except CancelledError:
+                    continue
                 except Exception as e:
+                    if self.stop_event.is_set():
+                        continue
                     fail += 1
                     self._log_q(f"[{name}] ✗ 失败：{e}")
-                self.msg_q.put(("tick", None))
-                self.msg_q.put(("status", f"已处理 {ok + fail}/{total} 个"
-                                          f"（成功 {ok}，失败 {fail}）"))
-        self.msg_q.put(("done", (ok, fail, time.time() - t0)))
+                # 这条视频不会再占时间了：不论成功失败，都按满额计入真实进度
+                self.msg_q.put(("vprogress", (idx, weights[idx])))
+        elapsed = time.time() - t0
 
         # ---- 收尾：趁用户看结果的时候，后台把整池素材的低清副本补齐 ----
         # 下次再处理（哪怕抽到完全不同的素材）就几乎不用等了。
         # 尺寸按"最大的一条视频"算：副本短边是"只大不小"更安全，算小了会在下次被重建。
-        if opts.get("pip_small", True) and opts.get("pip_dir") and infos:
+        if (not self.stop_event.is_set() and opts.get("pip_small", True)
+                and opts.get("pip_dir") and infos):
             biggest = max(infos.values(),
-                          key=lambda i: int(i.get("width") or 0) * int(i.get("height") or 0))
-            _warm_small_pool_async(opts["pip_dir"], biggest, opts, self._log_q)
+                          key=lambda i: _small_short_side(i["width"], i["height"], opts))
+            self.warm_stop_event = threading.Event()
+            warm_opts = dict(opts, stop_event=self.warm_stop_event)
+            _warm_small_pool_async(opts["pip_dir"], biggest, warm_opts)
+        # 先登记后台任务再通知 UI 解锁，避免下一批启动时漏掉预热取消信号。
+        self.msg_q.put(("done", (ok, fail, elapsed, out_size)))
 
     def _log_q(self, text):
         """供工作线程调用：把日志丢进队列，由主线程统一渲染"""
         self.msg_q.put(("log", text))
-
-    def _stage_cb(self, tag, msg):
-        """
-        供工作线程调用：汇报"当前在处理哪一步"，由主线程刷新底部状态栏。
-
-        必须走消息队列——Tk 控件只能在主线程里碰。
-        文字太长会挤掉右侧的 CPU / 内存读数，所以截断。
-        """
-        text = f"{tag} {msg}".strip()
-        if len(text) > 52:
-            text = text[:51] + "…"
-        self.msg_q.put(("status", text))
 
     def _stop(self):
         """停止：置位停止信号 + 终止所有在跑的 ffmpeg"""
@@ -3353,20 +3690,28 @@ class App(tk.Tk):
             return
         self.stop_event.set()
         self.registry.kill_all()
-        self._log("已请求停止：正在结束运行中的任务…")
+        self.btn_start.configure(text="正在停止…", state="disabled")
+        self.btn_stop.configure(state="disabled", text="停止")
+        self._set_progress_text("正在停止…")
 
     def _finish(self, payload):
         """全部任务结束后的收尾"""
-        ok, fail, cost = payload
+        ok, fail, cost, out_size = payload
         self.running = False
-        self.btn_start.configure(state="normal")
+        self.btn_start.configure(state="normal", text="开始处理")
         self.btn_prep.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
+        self.btn_stop.configure(state="disabled", text="已完成")
+        # 进度条收在真实完成度上：全部做完就是 100%，中途停止就停在停下的位置
+        self._draw_progress(100.0 if not self.stop_event.is_set() else self._v_percent())
         state = "已停止" if self.stop_event.is_set() else "全部完成"
-        self.status.configure(text=f"{state}：成功 {ok} 个，失败 {fail} 个，用时 {fmt_duration(cost)}")
-        self._log(f"—— {state}：成功 {ok} 个，失败 {fail} 个，总用时 {fmt_duration(cost)} ——")
+        self._set_progress_text(state)
+        done = ok + fail
+        self._log(f"—— {state}：成功 {ok} 个，失败 {fail} 个，"
+                  f"总用时 {fmt_duration(cost)}"
+                  + (f"（平均每个 {fmt_duration(cost / done)}）" if done else "")
+                  + f"，输出合计 {fmt_bytes(out_size)} ——")
         if ok:
-            self._log("做好的视频都在输出目录里，可以点「打开输出目录」查看。")
+            self._log("成品都在输出目录里，可以点「打开目录」查看。")
 
     # ------------------------------------------------------ 系统资源监控
     def _tick_monitor(self):
@@ -3388,21 +3733,14 @@ class App(tk.Tk):
                 self.mon_cpu_text.configure(text=f"{cpu:.0f}%")
 
             used, total = s["mem_used"], s["mem_total"]
-            if not used or not total:
+            if used is None or not total:
                 self.mon_mem["value"] = 0
                 self.mon_mem_text.configure(text="—")
             else:
                 pct = 100.0 * used / total
                 self.mon_mem["value"] = pct
-                self.mon_mem_text.configure(text=f"{pct:.0f}%　{fmt_bytes(used)}/{fmt_bytes(total)}")
+                self.mon_mem_text.configure(text=f"{pct:.0f}%　{used / 1024**3:.1f}/{total / 1024**3:.1f} GiB")
 
-            bits = []
-            if s["self_rss"]:
-                bits.append(f"本工具占用 {fmt_bytes(s['self_rss'])}")
-            running = self.registry.count()
-            if running:
-                bits.append(f"正在转码 {running} 个")
-            self.mon_proc_text.configure(text="　·　".join(bits))
         except Exception:
             pass                                        # 监控出问题也不能影响处理流程
         finally:
@@ -3414,9 +3752,9 @@ class App(tk.Tk):
     def _finish_error(self, msg):
         """启动阶段异常的统一处理"""
         self.running = False
-        self.btn_start.configure(state="normal")
+        self.btn_start.configure(state="normal", text="开始处理")
         self.btn_prep.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
+        self.btn_stop.configure(state="disabled", text="停止")
         messagebox.showerror("错误", msg)
 
 
