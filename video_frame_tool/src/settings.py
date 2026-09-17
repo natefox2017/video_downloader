@@ -12,10 +12,8 @@ from .platform_compat import config_file_path
 # 一·五、用户配置读写（"记住上次选择"的核心实现）
 # ============================================================================
 # 配置文件位置由 user_config_dir() 按平台决定，内容为 JSON：
-#   paths   —— 首图目录 / 主图目录 / 视频目录 / 画中画目录（上次选择的路径）
-#   pip     —— 画中画几何、掐头去尾、加速
-#   random  —— 抗查重随机化开关
-#   run     —— 并发数、编码档位、首帧叠加
+#   paths   —— 视频目录 / 片头目录 / 片尾目录（上次选择的路径）
+#   fission —— 片头/片尾/混淆三个独立开关 + 数量 + 混淆份数
 # 任何路径都不写死在代码里，全部由用户选择后记录、下次启动回填。
 # ============================================================================
 
@@ -37,10 +35,6 @@ def load_settings():
     """
     读取用户配置；文件不存在或内容损坏时返回默认配置。
     返回值结构与 DEFAULT_SETTINGS 完全一致（缺失字段自动补默认）。
-
-    兼容性处理：老版本用 run.include_first（布尔：是否在首帧也叠加产品图），
-    新版本改为 run.prod_start（从第几帧开始叠加）。读取到老配置时换算过去，
-    这样用户的旧选择不会丢。
     """
     default = json.loads(json.dumps(DEFAULT_SETTINGS))     # 深拷贝一份默认配置
     try:
@@ -50,12 +44,6 @@ def load_settings():
         return default
 
     merged = _deep_merge(default, data)
-    try:
-        raw_run = data.get("run", {}) if isinstance(data, dict) else {}
-        if "prod_start" not in raw_run and raw_run.get("include_first"):
-            merged["run"]["prod_start"] = 0                # 老配置勾了"首帧也叠加" → 从第 0 帧起
-    except Exception:
-        pass
     return merged
 
 

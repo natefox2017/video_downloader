@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-frame-tool"
-version = "1.0.0"
-description = "短视频批处理工具（GUI）：换首帧、贴商品图、加随机拼接画中画"
+version = "2.0.0"
+description = "短视频批处理工具（GUI）：拼接片头片尾 + 容器混淆裂变，规避平台文件级查重"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Proprietary" }
@@ -23,13 +23,12 @@ dependencies = []
 ffmpeg = ["imageio-ffmpeg"]
 
 [project.scripts]
-video-frame-tool = "video_frame_tool.__main__:main"
+video-frame-tool = "src.__main__:main"
 
 [project.gui-scripts]
-video-frame-tool-gui = "video_frame_tool.__main__:main"
+video-frame-tool-gui = "src.__main__:main"
 
 [tool.setuptools]
+# src 布局：包内容在 src/ 目录，包名 = src
 package-dir = { "" = "src" }
-
-[tool.setuptools.packages.find]
-where = ["src"]
+packages = ["src", "src.ui"]

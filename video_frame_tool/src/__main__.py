@@ -1,4 +1,4 @@
-"""命令行入口：python -m video_frame_tool"""
+"""命令行入口：python -m src"""
 
 import sys
 

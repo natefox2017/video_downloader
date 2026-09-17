@@ -1,8 +1,7 @@
 """可中断的子进程调用与取消检查。
 
 ProcRegistry 统一登记进程以便「停止」能杀掉；_run() 读 -progress 输出时
-必须另开线程排空 stderr，否则管道写满会死锁。
-_check_stopped() 放在这里（而不是流水线模块）是为了避免 pip_track 与 pipeline 互相导入。"""
+必须另开线程排空 stderr，否则管道写满会死锁。"""
 
 from concurrent.futures import CancelledError
 import re
@@ -75,7 +74,7 @@ def _run(cmd, registry, on_progress=None, expected_dur=0.0):
 
     - 进程会注册到 registry，便于用户中途停止
     - 非 0 退出时抛出 RuntimeError，附带 stderr 最后几行，方便定位
-    - 传了 on_progress（命令里要带 -progress pipe:1，见 build_command）时，
+    - 传了 on_progress（命令里要带 -progress pipe:1）时，
       边跑边把 ffmpeg 汇报的真实编码进度折算成 0~1 回调出去
     """
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

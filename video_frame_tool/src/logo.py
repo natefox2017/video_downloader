@@ -16,7 +16,7 @@ from .platform_compat import user_config_dir
 #
 # 想换成自己的品牌 logo：把一个 png 图片命名为 logo.png，
 # 放到（任选其一，优先脚本同目录）：
-#     1) video_frame_tool.py 所在目录
+#     1) 包根目录（src/）
 #     2) 用户配置目录（位置见"零、平台适配层"的 user_config_dir）
 # 程序启动时优先用你的图片，找不到才用内嵌图标。建议正方形、256x256 以上。
 #
@@ -209,11 +209,11 @@ def _png_to_ppm_file(png_bytes, size):
 def _logo_search_paths():
     """自定义 logo 的查找位置（按优先级）
 
-    拆分前 logo.png 与单文件脚本同目录；现在包代码在 src/video_frame_tool/ 下，
+    拆分前 logo.png 与单文件脚本同目录；现在包代码在 src/ 下，
     所以同时找「包目录」和「项目根目录」，老习惯（把 logo.png 丢在项目里）继续有效。
     """
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(pkg_dir))
+    project_root = os.path.dirname(pkg_dir)
     return [
         os.path.join(pkg_dir, LOGO_FILE_NAME),
         os.path.join(project_root, LOGO_FILE_NAME),
