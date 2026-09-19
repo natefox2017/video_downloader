@@ -71,9 +71,10 @@ def field_stats(frame, parity, w=W, h=H):
 # ---------------------------------------------------------------------------
 
 def check_naming_and_pick():
-    """命名 = 搬运名 + 两位序号；前贴/尾贴随机抽取：够挑无放回、不够有放回。"""
-    assert fission.output_name('foo', 1) == 'foo_01.mp4'
-    assert fission.output_name('bar', 12) == 'bar_12.mp4'
+    """命名 = 两位序号开头 + `_` + 搬运名；前贴/尾贴随机抽取：够挑无放回、不够有放回。"""
+    assert fission.output_name('foo', 1) == '01_foo.mp4'
+    assert fission.output_name('bar', 12) == '12_bar.mp4'
+    assert fission.output_name('baz', 120) == '120_baz.mp4'   # 超过 99 自然变三位，不截断
     pool = ['a', 'b', 'c']
     assert len(fission.pick_segments(pool, 2)) == 2
     assert len(set(fission.pick_segments(pool, 2))) == 2, '够挑时不应重复'
