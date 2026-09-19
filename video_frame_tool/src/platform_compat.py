@@ -151,6 +151,9 @@ def enable_high_dpi():
     高 DPI 适配（仅 Windows 需要）。
     Windows 默认按 96 DPI 缩放，高分屏下 Tk 界面会发虚，这里开启 DPI 感知。
     macOS / Linux 由系统或窗口管理器处理，无需额外设置。
+
+    注意：开启 DPI 感知只是让画面变清晰，**字号跟着 DPI 变大是 Tk 的既定行为**，
+    布局要用 ui_scale() 一起放大才不会「字大框小」（下面有详细说明）。
     """
     if IS_WINDOWS:
         try:
@@ -158,3 +161,62 @@ def enable_high_dpi():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
             pass
+
+
+# ============================================================================
+# 界面布局缩放（Windows 高分屏）
+# ============================================================================
+# Tk 只有一个 DPI 开关：tk scaling =「一个排版点等于多少屏幕像素」。
+#   96 DPI（Windows 100% 缩放）→ 96/72 ≈ 1.333；150% → Windows 报 144 DPI，
+#   因为启动时调了 SetProcessDpiAwareness(1)，Tk 会把 tk scaling 设成 2.0。
+#
+# 关键点：tk scaling **只影响「字号是正数」的字体**（正数按"点"解释，会被乘上
+# scaling 换成像素）：10 号字在 100% 下是 13 px、150% 下是 20 px —— 这是对的。
+# 但界面里写死的像素（窗口 864×500、padx=20、滑块 length=180…）一个都不会长，
+# 于是字号相对窗口显得巨大、控件被挤在一起甚至裁掉。这就是 Windows 高分屏下
+# 「字体变得很大」的真正原因：**字体按 DPI 放大了，布局没有**。
+#
+# 做法：布局按同一个倍数放大，倍数 = 当前 tk scaling ÷ 96 DPI 基准。
+TK_SCALING_BASELINE = 96.0 / 72.0      # 96 DPI 下 Tk 的 pixels-per-point
+UI_SCALE_MIN = 1.0                     # 只放大不缩小：缩下去字会挤成一团
+UI_SCALE_MAX = 3.0                     # 上限按 300% 缩放封顶
+UI_SCALE_ENV = "VFT_UI_SCALE"          # 手动指定倍数（任何平台都生效，便于本机预览）
+
+
+def ui_scale(tk_scaling, platform=None, override=None):
+    """
+    把 Tk 的 `tk scaling`（pixels-per-point）换算成**界面布局的放大倍数**。
+
+    :param tk_scaling: 运行时读到的值，即 `root.tk.call("tk", "scaling")`
+    :param platform:   指定平台（默认当前平台）
+    :param override:   显式倍数；留空时读环境变量 VFT_UI_SCALE（便于在
+                       macOS 上按 Windows 150% 的观感预览界面，也方便现场救急）
+    :return: float，布局/间距/固定长度都要乘这个数
+
+    返回值语义：1.0 = 和 96 DPI 一样；1.5 = 150% 缩放；2.0 = 200% 缩放。
+    只放大不缩小（UI_SCALE_MIN），异常输入一律回落到 1.0，绝不抛异常。
+    macOS / Linux 恒为 1.0：那边布局本来就是按逻辑点走的，观感正常，不跟着改。
+
+    注意：Windows 的「设置 → 辅助功能 → 文本大小」还会额外放大系统 UI 字体，
+    这个不体现在 tk scaling 里；那种情况下用 VFT_UI_SCALE 手动补一点倍数即可。
+    """
+    platform = platform or PLATFORM
+    env = None if override is not None else os.environ.get(UI_SCALE_ENV)
+    for raw in (override, env):
+        if raw is None or raw == "":
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue                       # 写错的值直接忽略，不打断启动
+        if value > 0:
+            return max(0.5, min(4.0, value))
+    if platform != PLATFORM_WINDOWS:
+        return 1.0
+    try:
+        scaling = float(tk_scaling)
+    except (TypeError, ValueError):
+        return UI_SCALE_MIN
+    if scaling <= 0:
+        return UI_SCALE_MIN
+    return max(UI_SCALE_MIN, min(UI_SCALE_MAX, scaling / TK_SCALING_BASELINE))

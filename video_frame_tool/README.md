@@ -87,6 +87,17 @@ video-frame-tool
 - 指定解释器（不再回退，缺 tkinter 直接报错）：`PYTHON=/path/to/python3 ./run.sh`；Windows 上设 `set VFT_PYTHON=C:\...\python.exe` 后运行
 - 只看会用哪个解释器、跑什么命令（不启动界面）：`VFT_DRY_RUN=1 ./run.sh`
 
+## 高分屏（Windows）
+
+界面**字号按系统 DPI 放大、布局按同一倍数一起放大**，所以窗口、间距和字始终是配套的，
+不会出现「字特别大、控件挤成一团」。倍数 = 屏幕 DPI ÷ 96：125% → 1.25 倍、150% → 1.5 倍、200% → 2.0 倍。
+
+- 布局缩放规则写在 `platform_compat.ui_scale()`（唯一适配层），界面里所有像素走 `App._px()`。
+- 想手动调：设环境变量 `VFT_UI_SCALE=1.5`（任何平台都生效）。**macOS 上设这个变量就能
+  直接预览 Windows 150% 下的界面观感**，不用找高分屏。
+- 如果 Windows 还开了「设置 → 辅助功能 → 文本大小」，字会再被放大一档，而这一档不算在 DPI 里；
+  觉得字仍偏大就 `VFT_UI_SCALE` 调大一点补偿。
+
 ## 开发约定
 
 - **回归检查**：`python3 tests/test_video_frame_tool.py`

@@ -28,6 +28,7 @@ from .platform_compat import (
     ffmpeg_search_dirs,
     mono_font_family,
     open_folder,
+    ui_scale,
     user_config_dir,
 )
 

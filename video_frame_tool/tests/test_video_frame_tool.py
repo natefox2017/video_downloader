@@ -396,6 +396,59 @@ def check_progress_reporting():
     print('进度上报：总进度公式、单条真实进度、界面聚合（只报百分比）检查通过')
 
 
+def check_ui_scale():
+    """高分屏：Windows 按 DPI 放大**整个布局**，其它平台不动，且只放大不缩小。
+
+    这条防的是「Windows 上字体变得特别大」——Tk 只把字号按 DPI 放大（150% 缩放时
+    10 号字 13px → 20px），写死的像素间距不放大，界面就变成「字大框小」。
+    """
+    from src.platform_compat import (TK_SCALING_BASELINE, UI_SCALE_ENV,
+                                     UI_SCALE_MAX, ui_scale)
+    from src.ui.window import App, scaled
+
+    # 96 DPI（Windows 100% 缩放）= 基准，不放大
+    assert ui_scale(TK_SCALING_BASELINE, 'windows') == 1.0
+    # 150% → 144 DPI → tk scaling 2.0 → 布局放大 1.5
+    assert abs(ui_scale(2.0, 'windows') - 1.5) < 1e-9, ui_scale(2.0, 'windows')
+    # 200% → 192 DPI → tk scaling 2.667 → 放大 2.0
+    assert abs(ui_scale(96 * 2 / 72.0, 'windows') - 2.0) < 1e-9
+    # 只放大不缩小：低于 100% 的屏不做收缩，缩下去字会挤成一团
+    assert ui_scale(1.0, 'windows') == 1.0 and ui_scale(0.5, 'windows') == 1.0
+    # 封顶，且异常输入一律回落 1.0（不能因为读不到 DPI 就打不开界面）
+    assert ui_scale(99.0, 'windows') == UI_SCALE_MAX
+    assert ui_scale(None, 'windows') == 1.0 and ui_scale('x', 'windows') == 1.0
+    assert ui_scale(0, 'windows') == 1.0 and ui_scale(-3, 'windows') == 1.0
+    # macOS / Linux 维持现状（当前布局在那边观感正常）
+    assert ui_scale(2.0, 'macos') == 1.0 and ui_scale(2.0, 'linux') == 1.0
+
+    # 手动指定倍数：任何平台都生效 —— 用来在本机按 Windows 150% 的观感预览界面
+    assert abs(ui_scale(TK_SCALING_BASELINE, 'macos', override=1.5) - 1.5) < 1e-9
+    os.environ[UI_SCALE_ENV] = '1.5'
+    try:
+        assert abs(ui_scale(TK_SCALING_BASELINE, 'macos') - 1.5) < 1e-9
+        assert abs(ui_scale(TK_SCALING_BASELINE, 'windows') - 1.5) < 1e-9
+    finally:
+        os.environ.pop(UI_SCALE_ENV, None)
+    os.environ[UI_SCALE_ENV] = '乱写'
+    try:
+        assert abs(ui_scale(2.0, 'windows') - 1.5) < 1e-9, '写错的环境变量要忽略'
+    finally:
+        os.environ.pop(UI_SCALE_ENV, None)
+
+    # 布局像素换算：四舍五入成整数像素（864 宽的窗口在 150% 下变 1296）
+    assert scaled(864, 1.5) == 1296 and scaled(864, 1.0) == 864
+    assert scaled(20, 1.5) == 30 and scaled(180, 2.0) == 360
+    assert scaled(15, 1.5) == 22 and scaled(0, 2.0) == 0   # round(22.5) 取偶 = 22
+
+    class _Stub:
+        """只提供 _px 用到的 ui_scale，避免真的拉起 Tk 窗口。"""
+        ui_scale = 1.5
+
+    assert App._px(_Stub(), 864) == 1296, '界面必须真的走 _px() 缩放'
+    assert App._px(_Stub(), 14) == 21
+    print('高分屏布局缩放：Windows 按 DPI 放大、其它平台不动、只放大不缩小 检查通过')
+
+
 if __name__ == '__main__':
     check_naming_and_pick()
     check_concat_segments()
@@ -404,4 +457,5 @@ if __name__ == '__main__':
     check_fieldmix_end_to_end()
     check_probe_and_run()
     check_progress_reporting()
+    check_ui_scale()
     print('全部回归检查通过')

@@ -2,6 +2,11 @@
 
 窗口布局与任务调度。字号一律跟随系统默认 TkDefaultFont（只加粗、不改 pt），
 禁止 style.configure(".", font=...) —— 那会盖掉系统字体设置。
+**但布局里所有写死的像素都必须走 self._px()**：Windows 高分屏下 Tk 会把字号按
+DPI 放大（150% 缩放时 10 号字从 13 px 变 20 px），而像素常量不会跟着长，
+只放大字号不放大间距，界面就会「字大框小」——这是 Windows 上字看着特别大的根因，
+算法见 platform_compat.ui_scale（本文件不再重复）。
+`VFT_UI_SCALE=1.5` 可在任意平台按 150% 的观感预览界面。
 改界面后不要用脚本拉起真实 Tk 窗口做验证，交给用户自己开界面看。
 
 界面结构（2026-09-19 按用户要求重做）：
@@ -43,6 +48,11 @@ from ..settings import load_settings, save_settings
 # ============================================================================
 
 
+def scaled(n, scale):
+    """把「设计像素」按界面缩放倍数换成真实像素（窗口、间距、固定长度都用它）。"""
+    return int(round(float(n) * float(scale)))
+
+
 def pick_random(files, limit, rng=random):
     """从 files 里**随机抽** limit 个（不打乱相对顺序，抽满 limit 才随机）。
 
@@ -65,16 +75,23 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("短视频批处理工具")
+        # 布局缩放倍数：Windows 按屏幕 DPI 放大（150% → 1.5），其它平台 1.0。
+        # 字号是 Tk 自己按 DPI 放大的，布局必须跟上同一倍数（见模块 docstring）。
+        try:
+            self.ui_scale = ui_scale(self.tk.call("tk", "scaling"))
+        except Exception:
+            self.ui_scale = 1.0
         # 固定宽度（原 1080 的 80%，不随屏幕缩放）；高度在 _build_ui 之后按内容
         # 实际需要自适应（见 _fit_height），避免底部留大片空白或内容被裁。
         try:
             sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         except Exception:
             sw, sh = 1440, 900
-        width = 864
-        height = 500
-        self.geometry(f"{width}x{height}+{max(0, (sw - width) // 2)}+{max(24, (sh - height) // 3)}")
-        self.minsize(width, 480)
+        width = min(self._px(864), max(self._px(640), sw - self._px(40)))
+        height = self._px(500)
+        self.geometry(f"{width}x{height}+{max(0, (sw - width) // 2)}"
+                      f"+{max(self._px(24), (sh - height) // 3)}")
+        self.minsize(width, self._px(480))
         self.resizable(False, False)
 
         # ---- 窗口图标 ----
@@ -161,20 +178,29 @@ class App(tk.Tk):
             except OSError:
                 pass
 
+    def _px(self, n):
+        """设计像素 → 当前屏幕的真实像素（高分屏下所有间距/尺寸都要过这里）。"""
+        return scaled(n, getattr(self, "ui_scale", 1.0))
+
     def _fit_height(self, sh=None):
-        """窗口高度按内容实际需要自适应：内容少不留空白、内容多不被裁。宽度固定 864。"""
+        """窗口高度按内容实际需要自适应：内容少不留空白、内容多不被裁。
+
+        宽度固定为 864 设计像素（高分屏按 _px 放大，屏幕太窄时退让到屏幕宽 - 40）。
+        """
         try:
             self.update_idletasks()
             if sh is None:
                 sh = self.winfo_screenheight()
             sw = self.winfo_screenwidth()
-            width = 864
+            width = min(self._px(864), max(self._px(640), sw - self._px(40)))
             req = self.winfo_reqheight()          # 内容区所需高度（不含标题栏）
-            height = max(480, min(req + 12, 720, sh - 160))
+            height = max(self._px(480),
+                         min(req + self._px(12), self._px(720), sh - self._px(160)))
         except Exception:
             return
         try:
-            self.geometry(f"{width}x{height}+{max(0, (sw - width) // 2)}+{max(24, (sh - height) // 3)}")
+            self.geometry(f"{width}x{height}+{max(0, (sw - width) // 2)}"
+                          f"+{max(self._px(24), (sh - height) // 3)}")
         except Exception:
             pass
 
@@ -260,19 +286,21 @@ class App(tk.Tk):
         style.configure("Section.TLabel", font=(family, size, "bold"))
         style.configure("Status.TLabel", font=(family, size, "bold"))
         style.configure("Muted.TLabel", foreground="#647080")
-        style.configure("Card.TLabelframe", padding=4)
+        style.configure("Card.TLabelframe", padding=self._px(4))
         style.configure("Card.TLabelframe.Label",
                         font=(family, size, "bold"))
 
         root = ttk.Frame(self)
-        root.pack(fill="both", expand=True, padx=20, pady=12)
+        root.pack(fill="both", expand=True, padx=self._px(20), pady=self._px(12))
         root.columnconfigure(0, weight=1)
         root.rowconfigure(4, weight=1)      # 手动拉大窗口时由日志区吃掉多余空间
 
         def card(row, title):
             box = ttk.Labelframe(root, text=title, style="Card.TLabelframe",
-                                 padding=(12, 8, 12, 10))
-            box.grid(row=row, column=0, sticky="ew", padx=14, pady=(12, 0))
+                                 padding=(self._px(12), self._px(8),
+                                          self._px(12), self._px(10)))
+            box.grid(row=row, column=0, sticky="ew", padx=self._px(14),
+                     pady=(self._px(12), 0))
             box.columnconfigure(1, weight=1)
             return box
 
@@ -280,90 +308,97 @@ class App(tk.Tk):
         box1 = card(0, "拼接素材（每条成品独立随机抽取）")
         # 前贴
         ttk.Checkbutton(box1, text="前贴", variable=self.head_on).grid(row=0, column=0, sticky="w")
-        ttk.Entry(box1, textvariable=self.head_dir_var).grid(row=0, column=1, sticky="ew", pady=2)
+        ttk.Entry(box1, textvariable=self.head_dir_var).grid(row=0, column=1, sticky="ew",
+                                                            pady=self._px(2))
         hd = ttk.Frame(box1)
-        hd.grid(row=0, column=2, padx=(10, 0))
+        hd.grid(row=0, column=2, padx=(self._px(10), 0))
         ttk.Label(hd, text="随机拼").pack(side="left")
         ttk.Spinbox(hd, from_=1, to=HD_MAX_COUNT, width=3,
-                    textvariable=self.head_count_var).pack(side="left", padx=(4, 2))
+                    textvariable=self.head_count_var).pack(side="left",
+                                                           padx=(self._px(4), self._px(2)))
         ttk.Label(hd, text="个").pack(side="left")
         ttk.Button(hd, text="选文件夹…", width=10,
                    command=lambda: self._pick_dir(self.head_dir_var, "选择前贴视频文件夹")
-                   ).pack(side="left", padx=(8, 0))
+                   ).pack(side="left", padx=(self._px(8), 0))
         # 尾贴
         ttk.Checkbutton(box1, text="尾贴", variable=self.tail_on).grid(row=1, column=0, sticky="w")
-        ttk.Entry(box1, textvariable=self.tail_dir_var).grid(row=1, column=1, sticky="ew", pady=2)
+        ttk.Entry(box1, textvariable=self.tail_dir_var).grid(row=1, column=1, sticky="ew",
+                                                            pady=self._px(2))
         tl = ttk.Frame(box1)
-        tl.grid(row=1, column=2, padx=(10, 0))
+        tl.grid(row=1, column=2, padx=(self._px(10), 0))
         ttk.Label(tl, text="随机拼").pack(side="left")
         ttk.Spinbox(tl, from_=1, to=TL_MAX_COUNT, width=3,
-                    textvariable=self.tail_count_var).pack(side="left", padx=(4, 2))
+                    textvariable=self.tail_count_var).pack(side="left",
+                                                           padx=(self._px(4), self._px(2)))
         ttk.Label(tl, text="个").pack(side="left")
         ttk.Button(tl, text="选文件夹…", width=10,
                    command=lambda: self._pick_dir(self.tail_dir_var, "选择尾贴视频文件夹")
-                   ).pack(side="left", padx=(8, 0))
+                   ).pack(side="left", padx=(self._px(8), 0))
         # 封面：随机取 1 张图片，替换成片第 0 帧
         ttk.Checkbutton(box1, text="封面", variable=self.cover_on).grid(row=2, column=0, sticky="w")
-        ttk.Entry(box1, textvariable=self.cover_dir_var).grid(row=2, column=1, sticky="ew", pady=2)
+        ttk.Entry(box1, textvariable=self.cover_dir_var).grid(row=2, column=1, sticky="ew",
+                                                             pady=self._px(2))
         cv = ttk.Frame(box1)
-        cv.grid(row=2, column=2, padx=(10, 0))
+        cv.grid(row=2, column=2, padx=(self._px(10), 0))
         ttk.Label(cv, text="随机取 1 张").pack(side="left")
         ttk.Button(cv, text="选文件夹…", width=10,
                    command=lambda: self._pick_dir(self.cover_dir_var, "选择封面图片文件夹")
-                   ).pack(side="left", padx=(8, 0))
+                   ).pack(side="left", padx=(self._px(8), 0))
 
         # ---------- 模块二：搬运视频 ----------
         box2 = card(1, "搬运视频（一个搬运出一条成品）")
         ttk.Entry(box2, textvariable=self.dir_var).grid(row=0, column=0, columnspan=3,
-                                                        sticky="ew", pady=2)
+                                                        sticky="ew", pady=self._px(2))
         ttk.Button(box2, text="选文件夹…", width=10,
                    command=lambda: self._pick_dir(self.dir_var, "选择搬运视频文件夹")
-                   ).grid(row=0, column=3, padx=(10, 0))
+                   ).grid(row=0, column=3, padx=(self._px(10), 0))
         limit_row = ttk.Frame(box2)
-        limit_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        limit_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(self._px(6), 0))
         ttk.Label(limit_row, text="随机处理").pack(side="left")
-        self.limit_scale = ttk.Scale(limit_row, from_=1, to=1, length=180,
+        self.limit_scale = ttk.Scale(limit_row, from_=1, to=1, length=self._px(180),
                                      variable=self.limit_var,
                                      command=lambda *_: self._update_limit_label())
-        self.limit_scale.pack(side="left", padx=(4, 4))
+        self.limit_scale.pack(side="left", padx=(self._px(4), self._px(4)))
         self.limit_label = ttk.Label(limit_row, text="—", width=18, anchor="w")
         self.limit_label.pack(side="left")
 
         # ---------- 同时处理 + 输出到（靠左）；开始处理（最右） ----------
         bar = ttk.Frame(root)
-        bar.grid(row=2, column=0, sticky="ew", padx=14, pady=(12, 0))
+        bar.grid(row=2, column=0, sticky="ew", padx=self._px(14), pady=(self._px(12), 0))
         ttk.Label(bar, text="同时处理").pack(side="left")
         ttk.Spinbox(bar, from_=1, to=WORKERS_MAX, width=4,
-                    textvariable=self.workers_var).pack(side="left", padx=(4, 0))
+                    textvariable=self.workers_var).pack(side="left", padx=(self._px(4), 0))
         # 输出目录：只有按钮 + 路径文字（无输入框）；默认 ~/Desktop/out，不存在自动新建
         ttk.Button(bar, text="输出到", width=8,
                    command=lambda: self._pick_dir(self.out_dir_var, "选择输出文件夹")
-                   ).pack(side="left", padx=(16, 0))
+                   ).pack(side="left", padx=(self._px(16), 0))
         self.out_path_label = ttk.Label(bar, text="", style="Muted.TLabel")
-        self.out_path_label.pack(side="left", padx=(8, 0))
+        self.out_path_label.pack(side="left", padx=(self._px(8), 0))
         self.btn_start = ttk.Button(bar, text="开始处理", command=self._toggle_run,
                                     default="active", width=12)
         self.btn_start.pack(side="right")
 
         # ---------- 进度 ----------
         f_prog = ttk.Frame(root)
-        f_prog.grid(row=3, column=0, sticky="ew", padx=14, pady=(10, 0))
+        f_prog.grid(row=3, column=0, sticky="ew", padx=self._px(14), pady=(self._px(10), 0))
         f_prog.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(f_prog, mode="determinate")
         self.progress.grid(row=0, column=0, sticky="ew")
         self.progress_text = ttk.Label(f_prog, text="就绪", width=12, anchor="e",
                                        style="Status.TLabel")
-        self.progress_text.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self.progress_text.grid(row=0, column=1, sticky="e", padx=(self._px(12), 0))
 
         # ---------- 日志（初始按内容定高；窗口被拉大时随之长高） ----------
         f_log = ttk.Labelframe(root, text="日志", style="Card.TLabelframe",
-                               padding=(12, 8, 12, 10))
-        f_log.grid(row=4, column=0, sticky="nsew", padx=14, pady=(10, 14))
+                               padding=(self._px(12), self._px(8),
+                                        self._px(12), self._px(10)))
+        f_log.grid(row=4, column=0, sticky="nsew", padx=self._px(14),
+                   pady=(self._px(10), self._px(14)))
         f_log.columnconfigure(0, weight=1)
         f_log.rowconfigure(0, weight=1)
         self.log_box = tk.Text(f_log, height=6, wrap="word",
                                font=(mono_font_family(), 11), relief="flat", borderwidth=0,
-                               padx=8, pady=8)
+                               padx=self._px(8), pady=self._px(8))
         self.log_box.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(f_log, orient="vertical", command=self.log_box.yview)
         sb.grid(row=0, column=1, sticky="ns")
