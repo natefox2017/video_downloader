@@ -11,10 +11,10 @@
 | 组件 | 入口 | 技术栈 | 启动/加载方式 |
 |---|---|---|---|
 | 抖音批量下载器 | `manifest.json` | Chrome MV3 + 原生 JS（无框架、无构建） | `chrome://extensions/` → 开发者模式 → 加载已解压的扩展 |
-| 视频批处理工具 | `video_frame_tool/`（src 布局包，入口 `__main__.py`） | Python 3.8+ 标准库 + Tkinter + ffmpeg | `cd video_frame_tool && ./run.sh`（一键启动，自动挑带 tkinter 的解释器；也可 `PYTHONPATH=src python3 -m video_frame_tool`） |
+| 视频批处理工具 | `video_frame_tool/`（src 布局包，包名 = `src`，入口 `__main__.py`） | Python 3.8+ 标准库 + Tkinter + ffmpeg | `cd video_frame_tool && ./run.sh`（一键启动，自动挑带 tkinter 的解释器；也可 `PYTHONPATH=. python3 -m src`） |
 
 两个组件都是**直改即生效**的形态：扩展没有打包步骤，Python 工具没有依赖安装步骤
-（原单文件 `video_frame_tool.py` 已按功能拆分到 `video_frame_tool/src/video_frame_tool/`）。
+（原单文件 `video_frame_tool.py` 已按功能拆分到 `video_frame_tool/src/` 下）。
 **不要引入构建工具、打包器、npm 依赖或第三方 Python 包**（`imageio-ffmpeg` 是唯一例外，且仅在找不到系统 ffmpeg 时作为兜底被动态导入）。
 
 ## 2. 开发与自检命令
@@ -63,24 +63,39 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
    代码里**不允许出现任何具体用户路径**（如 `/Users/xxx/...`、`C:\Users\...`）。所有路径来自用户选择，并持久化到 `settings.json`。新增可配置项请走 `DEFAULT_SETTINGS` 结构 + `load_settings()` / `save_settings()`。
 2. **平台差异只允许写在 `platform_compat.py`（原「零、平台适配层」）。**
    其它任何位置出现 `if sys.platform == ...` 或 `os.name == "nt"` 都算违规。平台函数**必须支持显式传 `platform=` 参数**，以便在不换系统的前提下验证三个分支。
-3. **三个功能各自独立、可任意组合**（片头 / 片尾 / 混淆），界面三开关同组，全关时禁用「开始」。
-   - 片头：从片头目录随机抽 N 个视频拼在主体前；片尾同理拼在主体后；
-   - 混淆：把主体（或拼接产物）逐字复刻参考样本 22.mp4 的容器混淆，本地播放器拒读、平台可播；
-   - 只开拼接、不开混淆 → 输出标准 MP4；不开拼接、只开混淆 → 纯样本效果。
-4. **成品规格锁死为参考样本 720×1276 / 30fps**，不随片头/主体/片尾变化。
+3. **主流程只有一条，没有可选分支：拼接 → 复刻22 混淆。**
+   每条成品 =（封面）+ 前贴×N + 搬运 + 尾贴×N，拼好后一律走 `fieldmix` 混淆输出。
+   - 前贴/尾贴：从各自目录随机抽 N 个视频（N 由界面 Spinbox 定，**每条成品独立随机**）；
+   - 搬运：搬运目录里**按排序取**的前若干个，**一个搬运出一条成品**，条数 = 界面「只处理前」滑块值；
+   - 封面：从封面目录随机取 1 张图片，**强制拉伸**替换拼接片第 0 帧（时长/帧数不变，每条独立随机）；
+   - 界面**没有**「改音色 / 加噪点 / 混淆算法切换」开关（2026-09-19 用户要求下掉）；
+     **对应代码也已在 09-19 晚按用户要求删除**（含独立命令行脚本 `obfuscate_cli.py` 与旧算法 `260917`）。
+     要找回改音色 / 加噪点 / 命令行版：看项目根 `复刻22_已验证备份_20260919/` 或 git 历史，**不要凭记忆重写**。
+   - 界面固定用 `obfuscate.DEFAULT_ALGORITHM`（= `fieldmix`），`ALGORITHMS` 表里目前只有它一个。
+4. **成品规格锁死为参考样本 720×1276 / 30fps**，不随前贴/搬运/尾贴变化。
    各段先重编码成统一规格（缩放补黑边 + 补静音轨），再 concat demuxer `-c copy` 无损拼接。
-5. **裂变产物必须字节级互不相同。**
-   同一视频裂变 M 份，每份独立随机：重编码 CRF ±1 抖动 + 假元数据（DateUTC/Duration/Tags DURATION）
-   随机化 + 抹分辨率的 Void 填随机字节。三处随机源叠加保证 N 份哈希必不同。
-6. **输出目录固定为主体目录/out/，命名 = 主体名 + `_` + 两位序号（01~99）**，便于按来源区分、按序号排序。
+   封面是「替换第 0 帧」（`overlay=enable='eq(n,0)'` 叠进第一个段的编码），不额外插段、不加时长。
+5. **每条产物必须字节级互不相同。**
+   fieldmix 每次编码都**重新随机**色块图（`time_ns` 做种子），外加容器 DateUTC 取每条的处理时刻，
+   保证 N 条哈希必不同。不做 CRF 抖动、不写死假值。
+6. **输出目录默认 `~/Desktop/out`（可用「输出到」更改，不存在自动新建）**，
+   命名 = 搬运视频名 + `_` + 两位序号（01~99），序号是**全局递增**的成品序号，便于排序且保证不重名。
 7. **进度只吃真实数字，不做估算动画。**
    ffmpeg 真实进度来自 `-progress pipe:1` 的 `out_time=`，`_run()` 边读 stdout 边回调；
    **必须有独立线程排空 stderr**，否则管道写满会死锁。界面按「已完成份数 / 总份数」算百分比。
 8. **容器混淆只做「改写」，不做二次重编码。**
    一次 x264 重编码（配方逐项对齐样本 SEI，见 `CLONE_X264`）+ 一次纯 Python 容器改写（`_clone_container`）。
    改动滤镜链 / 编码参数后必跑 `python3 video_frame_tool/tests/test_video_frame_tool.py`。
+   默认算法 `fieldmix` 复刻 `11 → 22 → 33` 的隔行流程（逐场量化结论见项目根「复刻22_已验证备份/README.md」）：
+   - 偶行场 = 一整张**静态强彩色色块图**（每成品重新随机；只出 1 帧再 `loop` 复用，否则闪烁且码率暴涨）；
+     奇行场 = 原画面。**第 0 帧整帧保留原画** —— 平台用第一帧取封面，第 0 帧若是色块，成品封面就是彩虹横纹。
+   - ⚠️ `blend` 的 `N` **从 1 起算**，判断「第 0 帧」必须写 `if(lt(N,1.5),A,B)`；写成 `lt(N,1)` 永远不生效（踩过）。
+   - 转 `yuv420p` 时必须用 `interl=1` 按场采样色度，否则强彩色上场会污染原画下场。
+   - 画面帧标记必须是 BFF（`-top 0`），容器 `FieldOrder` 仍伪装成 TFF；两者相反是样本的关键特征。
+   - 按「源帧数 - 1」截帧（`needs_frames=True`），复刻样本丢掉最后一帧的行为。
+   - 容器 Duration 写死 1032ms、Tags DURATION 写死 `00:00:01.121`（与样本一致）。
 9. **同名覆盖保护必须覆盖所有路径。**
-   输出目录选成源目录时，`process_video` 与 `process_one_fission` 都要避免同名覆盖源文件。
+   输出目录选成源目录时，`process_video` 与 `process_one_output` 都要避免同名覆盖源文件。
 10. **日志限流 + 状态刷新合并**：一轮消息只刷新最后状态与累计进度；后台日志走队列，不能直接调用操作 Tk 的 `_log()`。
 
 ## 4. 易踩坑点（血泪教训，改代码前先看）
@@ -92,7 +107,8 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
 | **worker 错峰启动的时间不能太长** | 实测 10 线程 × 80 ms 错峰，跨度 720 ms，遇到 300 ms 就能返回的小文件时并发峰值只有 8。当前 40 ms 是刻意压下来的，调大前先算跨度 |
 | **Tk 关闭时序** | `after()` 定时器要在 `WM_DELETE_WINDOW` 里 `after_cancel`，否则关窗时报 `invalid command name ..._poll_queue` |
 | **Tk 数值输入框的 `get()` 会抛 TclError** | 输入框被清空或填了非数字时，`IntVar.get()` / `tk.Spinbox` 关联变量的 `get()` 直接抛 `TclError`。`_snapshot()` 在**关窗时**也会被调用，一旦抛出就**关不掉窗口**。所有读输入框的地方都必须 `try/except` 兜住 |
-| **输出路径不能等于源路径** | 输出目录若恰好等于源视频所在目录，`<name>.mp4` 会撞上源文件。`process_video` / `process_one_fission` 里已有同名检测并自动加 `_已处理` 后缀，改命名逻辑时别删 |
+| **输出路径不能等于源路径** | 输出目录若恰好等于源视频所在目录，`<name>.mp4` 会撞上源文件。`process_video` 已有同名检测并自动加 `_已处理` 后缀，改命名逻辑时别删 |
+| **`nullsrc` 的尺寸是 `WxH`，不是 `W:H`** | `_fieldmix_pattern` 里写 `size=720:1276` 会直接报 `Error parsing a filter description`。`scale` 才是冒号分隔，两者别混 |
 | **concat demuxer 的 list 文件不能写 Windows 反斜杠** | `-f concat` 把反斜杠当转义符，`C:\...\b000.mp4` 会被解析坏（报 No such file）。写 list 时必须 `path.replace("\\", "/")` |
 | **ffmpeg 靠扩展名推断输出封装格式** | 临时文件写成 `xxx.mp4.part` 会直接报 `Unable to choose an output format`。临时文件名必须仍以真实扩展名结尾 |
 | **macOS 自带 python3 的 Tk 是 8.5，读不了 PNG** | 实测 `/usr/bin/python3`(3.9.6/Tk 8.5)：`PhotoImage(data=png_b64)` 全部报 `couldn't recognize image data`，**Tk 8.5 只认 PPM 文件**。`load_logo()` 有三级回退，删掉 `_png_decode` / `_png_to_ppm_file` 会让 macOS 用户看不到 logo |
@@ -124,5 +140,7 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
 
 1. **命名不统一**：`manifest.json` 的 `name` 是「抖抖抖 抖音视频下载器 (批量下载)」，而运行时日志与面板标题用「抖晓晓」。统一命名会改变用户在 Chrome 扩展页看到的名字，属于产品决策，**需先与维护者确认**。
 2. **`manifest.json` 的 `description` 仍是早期情绪化文案**，若要上架 Chrome 商店需重写。
-3. **回归检查尚未接入 CI**：`video_frame_tool/tests/test_video_frame_tool.py` 已覆盖命名、随机抽取、混淆裂变的哈希唯一性与可读性，CI 仍只做语法检查。
+3. **回归检查尚未接入 CI**：`video_frame_tool/tests/test_video_frame_tool.py` 已覆盖命名、随机抽取、
+   拼接规格、封面替换、复刻22 的滤镜配方与产物特征（容器拒读、哈希唯一、场结构），
+   以及命令行与核心的容器字节级一致性；CI 仍只做语法检查。
 4. **仓库尚未声明开源许可证**：在维护者决定之前不要添加 `LICENSE` 文件。

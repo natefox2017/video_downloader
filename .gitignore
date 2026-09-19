@@ -66,6 +66,11 @@ out/
 # 体积大且属个人素材，绝不入库。
 video_frame_tool/视频对比/
 
+# ---------- 已验证代码快照 ----------
+# 每个阶段跑通后存下的独立快照（含私有的对比样本 mp4），仅供本机回查。
+复刻22_已验证备份_*/
+video_frame_tool_backup_*/
+
 # ---------- WorkBuddy 相关工具目录 ----------
 # workbuddy-switch 是独立的 Rust 项目（自带 .git），不属于本仓库。
 workbuddy-switch/

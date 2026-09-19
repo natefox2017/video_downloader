@@ -1,13 +1,20 @@
-"""容器「混淆 / 复刻」批处理（界面「视频混淆」Tab 的核心逻辑）。
+"""容器「混淆 / 复刻」（界面主流程的最后一步）。
 
-只做一种效果：逐字复刻参考样本（原去重软件 22.mp4）——一次 x264 重编码
-（配方从样本 SEI 参数表逐项抄回，见 CLONE_X264 注释），再把容器改写成样本形状：
-分辨率元数据被同长度 Void 顶掉 → 本地播放器（QuickTime/VLC/ffmpeg）拒读，
-平台服务端重转码后能播。
+只做一种效果：**复刻参考样本 22.mp4**（原去重软件的输出），靠「一次 x264 重编码 +
+一次纯 Python 容器改写」实现本地拒读、平台可播。
 
-只依赖标准库 + ffmpeg；EBML 读写是自写的极简实现（见 read_vint / parse_elements）。
-容器形状、CRC 落盘约定、写死的假元数据（DateUTC / Duration 1032ms / Tags DURATION
-"00:00:01.121"）都与参考样本保持一致，改动前先看 _clone_container 里的注释。"""
+  fieldmix（唯一算法，2026-09-19 逐场逆向 22.mp4 得出）
+      画面：偶行场铺一张静态强彩色色块图、奇行场放原画面，**第 0 帧整帧保留原画**
+            （平台用第一帧取封面，第 0 帧若是色块，成品封面就是彩虹横纹）；
+            写 BFF 场序 + 真隔行编码，容器 FieldOrder 仍伪装成 TFF。
+      容器：Duration 写死 1032ms、Tags DURATION 写死 "00:00:01.121"，与样本一致。
+
+样本 11 → 22 → 33 的逐场量化结论、以及还原样本容器用的分析脚本，
+见项目根的「复刻22_已验证备份_20260919」（/tmp 会被清掉，那里是长期存档）。
+
+只依赖标准库 + ffmpeg；EBML 读写是自写的极简实现（见 _read_vint / _parse）。
+容器形状、CRC 落盘约定、写死的假元数据都与参考样本保持一致，
+改动前先看 _clone_container 里的注释。"""
 
 import os
 import shutil
@@ -16,6 +23,7 @@ import tempfile
 import time
 import zlib
 
+from .probe import probe_frames
 from .proc import _check_stopped, _run
 
 # ============================================================================
@@ -154,53 +162,73 @@ CLONE_X264 = [
 # 对外规格与样本 22.mp4 一致（用户明确要求：分辨率/帧率不要按原视频，按样本）
 CLONE_W, CLONE_H, CLONE_FPS, CLONE_CRF = 720, 1276, "30", "22"
 
-# 元数据策略：与「能过查重的原版 clone」保持一致——用**真实时长 + 当前时间**，
-# 不做任何随机化、也不写死样本假值（样本 22.mp4 的固定假值是去重软件自己的产物特征，
-# 与「真实时长对不上」反而容易被平台当异常信号）。
-# DateUTC 用当前时间（macOS 2001 基准，见 _now_date_ns）；Duration 用真实时长；Tags DURATION 按真实时长格式化。
-_CLONE_FAKE_DATE_NS = 0x0B4181401E382149   # 保留：仅当需要逐字复刻样本时才用
-_CLONE_FAKE_DURATION_MS = 1032.0
-_CLONE_FAKE_DUR_TEXT = b"00:00:01.121000000\x00"
-
 # 重编码耗时占绝对大头（实测容器改写不到 1 秒），进度权重按这个比例折算
 _ENCODE_WEIGHT = 0.95
 
 
 def _now_date_ns():
-    """当前时间的 macOS 日期表示（2001-01-01 起的纳秒），对齐原版 clone 的 DateUTC。"""
+    """当前时间的 macOS 日期表示（2001-01-01 起的纳秒）。
+
+    写进容器的 DateUTC：每份成品的处理时刻都不同 → 同一素材裂变多份必然哈希互异。
+    """
     return int((time.time() - 978307200) * 1e9)
 
 
-def _fmt_duration(ms):
-    """把毫秒时长格式化成样本风格的 DURATION 文本，例如 00:05:00.142000000。"""
-    sec = ms / 1000.0
-    return ("%02d:%02d:%02d.%03d000000" % (
-        int(sec // 3600), int(sec // 60) % 60, int(sec) % 60,
-        int(round((sec - int(sec)) * 1000)))).encode() + b"\x00"
+# ---- fieldmix：复刻 22.mp4 的上下场混合 ------------------------------------------
+# 样本实测量化（详见项目根「复刻22_已验证备份_20260919」的 README）：
+#   偶行场 = 一整张静态强彩色色块图，全程不变（均值 163.5 / 标准差 16.5，跨 920 帧 MAD ≤ 0.49）
+#   奇行场 = 真实画面 = 原片对应帧（与 11.mp4 同场 MAD ≈ 10，重编码噪声级）
+#   11[i] ↔ 22[i] 无时移；帧数 11(931) → 22(930)，即样本丢掉了最后一帧
+FIELD_DURATION_MS = 1032.0                        # 容器 Duration 写死值（样本如此）
+FIELD_DUR_TEXT = b"00:00:01.121000000\x00"        # Tags DURATION 写死值（样本如此）
+
+# blend 的 N **从 1 起算**（实测 lt(N,1) 永远不生效、lt(N,1.5) 生效），
+# 所以判断「第 0 帧」必须写 N<1.5 —— 写成 N<1 会让第 0 帧照样叠色块，封面就毁了。
+_BLEND_EXPR = "if(eq(mod(Y,2),0),if(lt(N,1.5),A,B),A)"
 
 
-def _fake_meta(duration_ms):
-    """返回 (duration_ms, date_ns, dur_text)，用真实时长 + 当前时间（对齐原版 clone 默认行为）。"""
-    return float(duration_ms), _now_date_ns(), _fmt_duration(duration_ms)
+def _fieldmix_pattern(seed):
+    """生成一整张静态强彩色色块图（每次调用重新随机 → 每个成品图案都不同）。
 
-
-def _encode_cmd(ffmpeg, src, mid):
-    """构造复刻配方的重编码命令（先编码成标准 MKV，容器改写是后面一步的事）。
-
-    CRF 固定 22（对齐原版 clone，不做随机抖动——裂变多份的字节差异由码流内容
-    本身保证，不靠破坏质量参数）。
+    只出 1 帧再 loop 复用：避免逐帧重算导致闪烁与码率暴涨。
     """
-    crf = CLONE_CRF
+    return (
+        "nullsrc=size=%sx%s:rate=%s,trim=end_frame=1,format=gbrp,"
+        "geq=r='160+50*sin(floor(X/90)*12.9898+floor(Y/90)*78.233+%d)':"
+        "g='167+50*sin(floor(X/90)*39.3468+floor(Y/90)*11.135+%d)':"
+        "b='155+50*sin(floor(X/90)*73.156+floor(Y/90)*52.235+%d)',"
+        "boxblur=30:2,format=yuv444p,loop=loop=-1:size=1:start=0,"
+        "setpts=N/(%s*TB)[pat]"
+    ) % (CLONE_W, CLONE_H, CLONE_FPS, seed, seed + 1, seed + 2, CLONE_FPS)
+
+
+def _encode_cmd_fieldmix(ffmpeg, src, mid, frames=None):
+    """构造 fieldmix 的重编码命令（先出标准 MKV，容器改写是后面一步）。
+
+    frames: 限制输出帧数。调用方按「源帧数 - 1」传入 —— 复刻样本丢掉最后一帧的行为。
+    """
+    seed = time.time_ns() % 1000000
+    filters = (
+        "[0:v]scale=%s:%s,fps=%s,format=yuv444p,lutyuv=y='val-10'[src];"
+        % (CLONE_W, CLONE_H, CLONE_FPS)
+        + _fieldmix_pattern(seed) + ";"
+        # 第 0 帧两场都用原画：平台用第一帧取封面，不能让它看到色块。
+        "[src][pat]blend=all_expr='%s':shortest=1," % _BLEND_EXPR
+        # 转 4:2:0 时必须按隔行场分别采样色度，否则强彩色上场会污染原画下场。
+        + "setfield=bff,scale=%s:%s:interl=1,format=yuv420p[v]"
+        % (CLONE_W, CLONE_H)
+    )
     return [
         ffmpeg, "-y", "-hide_banner", "-nostats", "-v", "error",
         "-i", src,
-        "-vf", "scale=%d:%d,fps=%s" % (CLONE_W, CLONE_H, CLONE_FPS),
-        # 隔行标记必须在 -x264-params 之前，否则 x264 不认
-        "-flags", "+ilme+ildct", "-top", "1",
-        "-c:v", "libx264", "-preset", "superfast", "-crf", crf,
+        "-filter_complex", filters, "-map", "[v]", "-map", "0:a:0?",
+        # 画面内部写 BFF（与样本一致），容器那边的 FieldOrder 仍伪装成 TFF。
+        "-flags", "+ilme+ildct", "-top", "0",
+        "-c:v", "libx264", "-preset", "superfast", "-crf", CLONE_CRF,
         "-pix_fmt", "yuv420p", "-profile:v", "high",
         "-x264-params", ":".join(CLONE_X264),
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        *(["-frames:v", str(int(frames))] if frames else []),
         "-progress", "pipe:1",
         "-f", "matroska", mid,
     ]
@@ -285,7 +313,11 @@ def _clone_tags(dur_text):
 
 
 def _clone_container(mid):
-    """把 ffmpeg 产出的标准 MKV 改写成样本 22.mp4 的容器形状，返回新文件字节。"""
+    """把 ffmpeg 产出的标准 MKV 改写成样本 22.mp4 的容器形状，返回新文件字节。
+
+    Duration / DURATION 写死成样本值（FIELD_*）；DateUTC 用当前时间 →
+    每份成品字节都不同。
+    """
     tree = _parse(mid, 0, len(mid))
     seg = _find(tree, 0x18538067)
     if seg is None:
@@ -305,15 +337,9 @@ def _clone_container(mid):
     if void82 is None or not clusters:
         raise RuntimeError("容器结构不符合预期")
 
-    info_old = _find(seg, 0x1549A966)
-    # 元数据用真实时长 + 当前时间（对齐能过查重的原版 clone），不写死样本假值。
-    raw_dur = _find(info_old, 0x4489)
-    real_ms = struct.unpack(">d", raw_dur.data)[0] if raw_dur else 0.0
-    duration_ms, date_ns, dur_text = _fake_meta(real_ms)
-
-    info = _clone_info(duration_ms, date_ns)
+    info = _clone_info(FIELD_DURATION_MS, _now_date_ns())
     tracks = _clone_tracks(_find(seg, 0x1654AE6B))
-    tags = _clone_tags(dur_text)
+    tags = _clone_tags(FIELD_DUR_TEXT)
 
     cues = None
     if cues_old is not None:
@@ -368,52 +394,50 @@ def _clone_container(mid):
 
 
 # ============================================================================
-# 四、算法注册表：多种混淆算法，统一接口，可切换、可扩展
+# 四、算法注册表：统一接口，可扩展
 # ============================================================================
 #
-# 每个混淆算法是一个对象，暴露三个钩子（输入/输出约定一致）：
+# 每个混淆算法是一个对象，暴露四个钩子（输入/输出约定一致）：
 #   name           算法标识（唯一，界面下拉用）
 #   label          展示名
-#   encode_cmd(ffmpeg, src, mid) -> list  重编码命令（先产出标准 MKV 中间件）
+#   encode_cmd(ffmpeg, src, mid, frames=None) -> list  重编码命令
 #   rewrite(mid_bytes) -> bytes           把中间件改写成混淆容器
-#   meta(duration_ms) -> (dur_ms, date_ns, dur_text)   元数据三元组
+#   needs_frames   为真时调用方会按「源帧数 - 1」截帧（复刻样本丢最后一帧的行为）
 #
 # 加新算法 = 新增一个算法对象 + 在 ALGORITHMS 里注册一行，**不动已有算法**，
-# 崩溃面被隔离。当前「逐字复刻 22.mp4」是算法 clone22（默认）。
+# 崩溃面被隔离。算法按「通过查重实测的日期」命名（如 260919），旧算法保留不删。
+# 当前只有 fieldmix（复刻 22.mp4 的上下场混合）。
 # ============================================================================
 
 
-def _algo_260917():
-    """算法 260917（2026-09-17 实测通过查重）：逐字复刻参考样本 22.mp4。
+def _algo_fieldmix():
+    """算法 fieldmix（2026-09-19 逐场逆向 22.mp4 得出，界面唯一算法）。
 
-    一次 x264 重编码（CLONE_X264 配方）+ 容器改写（抹分辨率 → 本地拒读、平台可播），
-    元数据用真实时长 + 当前时间。所有逻辑就是本文件上文第二、三节的函数。
-
-    算法按「通过查重实测的日期」命名：今天这套验证能过，就叫 260917；
-    以后快手算法更新、换新配方时，按当天日期再注册新算法（如 260930），
-    旧算法保留不删，界面用 radio 切换。
+    画面：偶行场铺静态强彩色色块图、奇行场放原画面，第 0 帧整帧保留原画；
+          写 BFF 场序 + 真隔行编码，容器 FieldOrder 伪装成 TFF。
+    容器：Duration 写死 1032ms、Tags DURATION 写死 "00:00:01.121"。
     """
     return {
-        "name": "260917",
-        "label": "260917",
-        "encode_cmd": _encode_cmd,
+        "name": "fieldmix",
+        "label": "复刻22",
+        "encode_cmd": _encode_cmd_fieldmix,
         "rewrite": _clone_container,
-        "meta": _fake_meta,
+        "needs_frames": True,
     }
 
 
 # 算法注册表：name -> 算法对象。界面/调用方据此枚举和切换。
 ALGORITHMS = {
     a["name"]: a for a in [
-        _algo_260917(),
+        _algo_fieldmix(),
     ]
 }
 
-DEFAULT_ALGORITHM = "260917"
+DEFAULT_ALGORITHM = "fieldmix"
 
 
 def get_algorithm(name=None):
-    """按名字取算法对象；None 或未知名字回落到默认算法（clone22）。"""
+    """按名字取算法对象；None 或未知名字回落到默认算法。"""
     if name is None or name not in ALGORITHMS:
         return ALGORITHMS[DEFAULT_ALGORITHM]
     return ALGORITHMS[name]
@@ -433,7 +457,7 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
     :param on_progress: 真实完成度回调（0~1）
     :param log: 日志回调（可空）
     :param out_name: 输出文件名（不含目录）；None 时用源视频名 + .mp4
-    :param algorithm: 混淆算法名（见 ALGORITHMS）；None 用默认 clone22
+    :param algorithm: 混淆算法名（见 ALGORITHMS）；None 用默认算法
     """
     algo = get_algorithm(algorithm)
     _check_stopped({"stop_event": stop_event})
@@ -452,8 +476,15 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
     mid = os.path.join(tmpdir, "mid.mkv")
     try:
         _check_stopped({"stop_event": stop_event})
-        say("正在重编码（%s）…" % algo["label"])
-        cmd = algo["encode_cmd"](ffmpeg, src, mid)
+        # fieldmix 要复刻样本「丢掉最后一帧」的行为，所以先数帧再截
+        frames = None
+        if algo.get("needs_frames"):
+            total = probe_frames(src)
+            if total > 0:
+                frames = max(1, total - 1)
+        say("正在重编码（%s%s）…" % (algo["label"],
+                                    "，%d 帧" % frames if frames else ""))
+        cmd = algo["encode_cmd"](ffmpeg, src, mid, frames=frames)
 
         def report(frac):
             if on_progress:
@@ -479,13 +510,3 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
         pass
     say("✓ 完成，输出 %.2f MB" % (size / 1048576.0))
     return dst
-
-
-def scan_sources(source):
-    """把「目录或单个视频」统一解析成文件列表（目录不递归，与主流程一致）。"""
-    if os.path.isdir(source):
-        from .probe import _list_videos
-        return _list_videos(source)
-    if os.path.isfile(source):
-        return [source]
-    return []

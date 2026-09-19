@@ -1,15 +1,16 @@
 """短视频批处理工具（GUI）。
 
-功能：把一批主体视频裂变成多份成品，可随机拼接片头/片尾，再逐字复刻参考样本的
-容器混淆（本地播放器拒读、平台可播），并保证每份产物的文件哈希互不相同。
+功能：把搬运视频目录里的视频逐条加工成成品，每条可随机拼接前贴/尾贴、可用封面图
+替换第 0 帧，再走「复刻 22.mp4」的上下场混合 + 容器混淆（本地播放器拒读、平台可播），
+并保证每条产物的文件哈希互不相同。
 
 按功能拆分成多个子模块；本文件把所有顶层名字重新导出，
-因此 `import src as tool` 后 `tool.process_one_fission` 这类写法仍然可用。
+因此 `import src as tool` 后 `tool.process_one_output` 这类写法仍然可用。
 
 实现细节见项目 README 与各子模块 docstring。
 """
 
-__version__ = '2.0.0'
+__version__ = '3.1.0'
 
 from .platform_compat import (
     APP_NAME,
@@ -34,8 +35,6 @@ from .constants import (
     CPU_COUNT,
     CRF,
     DEFAULT_SETTINGS,
-    FISSION_DEFAULT_COUNT,
-    FISSION_MAX_COUNT,
     HD_DEFAULT_COUNT,
     HD_MAX_COUNT,
     LOG_MAX_LINES,
@@ -60,12 +59,6 @@ from .settings import (
     _deep_merge,
 )
 
-from .sysmon import (
-    SystemMonitor,
-    fmt_bytes,
-    fmt_duration,
-)
-
 from .logo import (
     load_logo,
 )
@@ -79,14 +72,19 @@ from .probe import (
     probe_media,
 )
 from .probe import (
+    probe_frames,
+)
+from .probe import (
     _list_videos,
     _parse_fps,
     _probe_fallback,
     _probe_json,
+    list_images,
 )
 
 from .proc import (
     ProcRegistry,
+    fmt_duration,
 )
 from .proc import (
     _PROGRESS_TIME_RE,
@@ -97,7 +95,6 @@ from .proc import (
 
 from .obfuscate import (
     process_video as obfuscate_video,
-    scan_sources as obfuscate_scan_sources,
 )
 from .obfuscate import (
     ALGORITHMS,
@@ -107,6 +104,7 @@ from .obfuscate import (
     CLONE_H,
     CLONE_W,
     CLONE_X264,
+    FIELD_DURATION_MS,
     get_algorithm,
 )
 
@@ -114,7 +112,8 @@ from .fission import (
     concat_segments,
     output_name,
     pick_segments,
-    process_one_fission,
+    process_batch,
+    process_one_output,
 )
 
 from .ui.window import (

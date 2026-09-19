@@ -30,11 +30,6 @@ class ProcRegistry:
         with self._lock:
             self._procs.discard(p)
 
-    def count(self):
-        """当前在跑的 ffmpeg 数量（界面监控栏用来显示"正在处理 N 个"）"""
-        with self._lock:
-            return len(self._procs)
-
     def kill_all(self):
         """终止所有在跑的 ffmpeg（停止按钮调用）"""
         with self._lock:
@@ -122,3 +117,18 @@ def _check_stopped(opts):
     event = opts.get("stop_event")
     if event is not None and event.is_set():
         raise CancelledError("处理已停止")
+
+
+def fmt_duration(seconds):
+    """把秒数格式化成"1 分 25 秒"这类便于阅读的形式（日志是给普通用户看的）。"""
+    try:
+        s = max(0, int(round(float(seconds))))
+    except Exception:
+        return "—"
+    if s < 60:
+        return f"{s} 秒"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m} 分 {s} 秒"
+    h, m = divmod(m, 60)
+    return f"{h} 小时 {m} 分"

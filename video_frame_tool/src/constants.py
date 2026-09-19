@@ -15,13 +15,12 @@ import os
 # ---- 编码参数 ----
 CRF = 20
 
-# ---- 片头/片尾拼接 + 混淆裂变（见 fission.py） ----
+# ---- 前贴/尾贴拼接 + 复刻22 混淆（见 fission.py） ----
+# 每条成品随机抽几个前贴 / 几个尾贴；搬运视频按顺序取（不随机），处理前 N 个。
 HD_DEFAULT_COUNT = 1
 HD_MAX_COUNT = 10
 TL_DEFAULT_COUNT = 1
 TL_MAX_COUNT = 10
-FISSION_DEFAULT_COUNT = 1
-FISSION_MAX_COUNT = 99
 # 成品固定分辨率 = 参考样本 22.mp4（720x1276）
 OUT_W, OUT_H = 720, 1276
 OUT_FPS = 30
@@ -38,22 +37,22 @@ WORKERS_MAX = 8
 WORKERS_DEFAULT = max(1, min(WORKERS_MAX, CPU_COUNT // 2))
 
 # ---- 配置文件结构（默认值的唯一来源：上面的常量） ----
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
     "paths": {
-        "video_dir": "",                # 主体视频目录（待处理/待混淆）
-        "head_dir": "",                 # 片头视频目录
-        "tail_dir": "",                 # 片尾视频目录
+        "video_dir": "",                # 搬运视频目录：实际要搬运的素材，取排序后的前 N 个处理
+        "head_dir": "",                 # 前贴视频目录
+        "tail_dir": "",                 # 尾贴视频目录
+        "cover_dir": "",                # 封面图片目录（勾「封面」时随机取一张做成片第 0 帧）
         "out_dir": "",                  # 成品输出目录；留空 = 桌面/out（不存在自动新建）
     },
     "fission": {
-        "head_on": False,
-        "head_count": HD_DEFAULT_COUNT,
-        "tail_on": False,
-        "tail_count": TL_DEFAULT_COUNT,
-        "ob_on": True,
-        "ob_count": FISSION_DEFAULT_COUNT,
+        "head_on": False,               # 前贴开关
+        "head_count": HD_DEFAULT_COUNT,  # 每条成品随机抽几个前贴
+        "tail_on": False,               # 尾贴开关
+        "tail_count": TL_DEFAULT_COUNT,  # 每条成品随机抽几个尾贴
+        "cover_on": False,              # 封面开关（随机取 1 张图替换成片第 0 帧）
     },
 }
 
@@ -61,3 +60,6 @@ VIDEO_EXTS = {
     ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".flv", ".wmv",
     ".webm", ".ts", ".mts", ".m2ts", ".3gp", ".mpg", ".mpeg", ".rmvb",
 }
+
+# 封面候选图扩展名（封面功能：随机取一张做成片第一帧）
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}

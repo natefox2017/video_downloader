@@ -2,7 +2,14 @@
 
 窗口布局与任务调度。字号一律跟随系统默认 TkDefaultFont（只加粗、不改 pt），
 禁止 style.configure(".", font=...) —— 那会盖掉系统字体设置。
-改界面后不要用脚本拉起真实 Tk 窗口做验证，交给用户自己开界面看。"""
+改界面后不要用脚本拉起真实 Tk 窗口做验证，交给用户自己开界面看。
+
+界面结构（2026-09-19 按用户要求重做）：
+    [拼接素材] 前贴 / 尾贴 / 封面 三个可选来源（前贴、尾贴各自可设随机拼几个）
+    [搬运视频] 搬运视频目录 + 「只处理前 N 个」滑块（N 条搬运 → N 条成品）
+    底部      同时处理 / 输出到 / 开始处理
+每条成品 = 封面 + 前贴×N + 搬运 + 尾贴×N → 拼接 → 复刻22 混淆。
+"""
 
 from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
@@ -18,19 +25,17 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
 
-from ..constants import (CPU_COUNT, FISSION_DEFAULT_COUNT, FISSION_MAX_COUNT,
-                         HD_DEFAULT_COUNT, HD_MAX_COUNT, LOG_MAX_LINES,
-                         TL_DEFAULT_COUNT, TL_MAX_COUNT,
-                         SETTINGS_VERSION, WORKERS_DEFAULT, WORKERS_MAX)
+from ..constants import (CPU_COUNT, HD_DEFAULT_COUNT, HD_MAX_COUNT,
+                         LOG_MAX_LINES, SETTINGS_VERSION, TL_DEFAULT_COUNT,
+                         TL_MAX_COUNT, WORKERS_DEFAULT, WORKERS_MAX)
 from ..ffmpeg_bin import FFMPEG
-from ..fission import process_one_fission
-from ..obfuscate import ALGORITHMS, DEFAULT_ALGORITHM
+from ..fission import process_one_output
+from ..obfuscate import DEFAULT_ALGORITHM
 from ..logo import load_logo
 from ..platform_compat import IS_MACOS, PLATFORM, mono_font_family
-from ..probe import _list_videos
-from ..proc import ProcRegistry
+from ..probe import _list_videos, list_images
+from ..proc import ProcRegistry, fmt_duration
 from ..settings import load_settings, save_settings
-from ..sysmon import fmt_duration
 
 # ============================================================================
 # 八、图形界面
@@ -38,7 +43,7 @@ from ..sysmon import fmt_duration
 
 
 class App(tk.Tk):
-    """主窗口：片头/片尾拼接 + 混淆裂变，三个功能各自独立开关、可任意组合。"""
+    """主窗口：搬运视频 → 封面/前贴/尾贴随机拼接 → 复刻22 混淆。"""
 
     def __init__(self):
         super().__init__()
@@ -50,9 +55,9 @@ class App(tk.Tk):
         except Exception:
             sw, sh = 1440, 900
         width = 864
-        height = 560
+        height = 500
         self.geometry(f"{width}x{height}+{max(0, (sw - width) // 2)}+{max(24, (sh - height) // 3)}")
-        self.minsize(width, 520)
+        self.minsize(width, 480)
         self.resizable(False, False)
 
         # ---- 窗口图标 ----
@@ -71,24 +76,16 @@ class App(tk.Tk):
         sf = self.settings["fission"]
 
         # ---- 路径 ----
-        self.dir_var = tk.StringVar(value=sp.get("video_dir", ""))
-        self.head_dir_var = tk.StringVar(value=sp.get("head_dir", ""))
-        self.tail_dir_var = tk.StringVar(value=sp.get("tail_dir", ""))
+        self.dir_var = tk.StringVar(value=sp.get("video_dir", ""))       # 搬运视频目录
+        self.head_dir_var = tk.StringVar(value=sp.get("head_dir", ""))   # 前贴目录
+        self.tail_dir_var = tk.StringVar(value=sp.get("tail_dir", ""))   # 尾贴目录
+        self.cover_dir_var = tk.StringVar(value=sp.get("cover_dir", ""))  # 封面图目录
         self.out_dir_var = tk.StringVar(value=sp.get("out_dir", ""))
 
-        # ---- 三个功能开关（独立，可任意组合） ----
+        # ---- 三个拼接开关（各自独立，可任意组合） ----
         self.head_on = tk.BooleanVar(value=bool(sf.get("head_on", False)))
         self.tail_on = tk.BooleanVar(value=bool(sf.get("tail_on", False)))
-        self.ob_on = tk.BooleanVar(value=bool(sf.get("ob_on", True)))
-        # 混淆算法（radio 单选，值 = 算法名；默认取注册表里的默认算法）
-        _algo = str(sf.get("ob_algorithm", DEFAULT_ALGORITHM))
-        if _algo not in ALGORITHMS:
-            _algo = DEFAULT_ALGORITHM
-        self.ob_algorithm = tk.StringVar(value=_algo)
-        # 处理数量上限（slider）：默认 = 混淆视频文件夹里的视频总数，
-        # 拖到 N 只处理排序后的前 N 个；换文件夹自动重置为新总数。不持久化。
-        self.limit_var = tk.IntVar(value=1)
-        self._video_total = 0
+        self.cover_on = tk.BooleanVar(value=bool(sf.get("cover_on", False)))
 
         # ---- 数量 ----
         try:
@@ -101,11 +98,13 @@ class App(tk.Tk):
         except Exception:
             _tl = TL_DEFAULT_COUNT
         self.tail_count_var = tk.IntVar(value=max(1, min(TL_MAX_COUNT, _tl)))
-        try:
-            _ob = int(float(str(sf.get("ob_count", FISSION_DEFAULT_COUNT))))
-        except Exception:
-            _ob = FISSION_DEFAULT_COUNT
-        self.ob_count_var = tk.IntVar(value=max(1, min(FISSION_MAX_COUNT, _ob)))
+
+        # 处理数量上限（slider）：默认 = 搬运视频文件夹里的视频总数，
+        # 拖到 N 就只处理排序后的前 N 个（一个搬运出一条成品）；换文件夹自动重置为新总数。
+        # 不持久化。
+        self.limit_var = tk.IntVar(value=1)
+        self._video_total = 0
+
         # 并发数不持久化：每次启动按 CPU 核数自动算默认值，用户本次会话内可改。
         self.workers_var = tk.IntVar(value=WORKERS_DEFAULT)
 
@@ -115,6 +114,7 @@ class App(tk.Tk):
         self.stop_event = threading.Event()
         self.running = False
         self._poll_id = None
+        self._no_ffmpeg = not FFMPEG
 
         self._build_ui()
         self.out_dir_var.trace_add("write", lambda *_: self._refresh_out_label())
@@ -153,7 +153,7 @@ class App(tk.Tk):
             sw = self.winfo_screenwidth()
             width = 864
             req = self.winfo_reqheight()          # 内容区所需高度（不含标题栏）
-            height = max(520, min(req + 12, 720, sh - 160))
+            height = max(480, min(req + 12, 720, sh - 160))
         except Exception:
             return
         try:
@@ -202,6 +202,7 @@ class App(tk.Tk):
                 "video_dir": self.dir_var.get().strip(),
                 "head_dir": self.head_dir_var.get().strip(),
                 "tail_dir": self.tail_dir_var.get().strip(),
+                "cover_dir": self.cover_dir_var.get().strip(),
                 "out_dir": self.out_dir_var.get().strip(),
             },
             "fission": {
@@ -209,9 +210,7 @@ class App(tk.Tk):
                 "head_count": num(self.head_count_var, HD_DEFAULT_COUNT, 1, HD_MAX_COUNT),
                 "tail_on": bool(self.tail_on.get()),
                 "tail_count": num(self.tail_count_var, TL_DEFAULT_COUNT, 1, TL_MAX_COUNT),
-                "ob_on": bool(self.ob_on.get()),
-                "ob_count": num(self.ob_count_var, FISSION_DEFAULT_COUNT, 1, FISSION_MAX_COUNT),
-                "ob_algorithm": self.ob_algorithm.get(),
+                "cover_on": bool(self.cover_on.get()),
             },
         }
 
@@ -260,11 +259,10 @@ class App(tk.Tk):
             box.columnconfigure(1, weight=1)
             return box
 
-        # ---------- 模块一：拼接片头片尾 ----------
-        box1 = card(0, "拼接片头片尾")
-        # 片头
-        ttk.Checkbutton(box1, text="片头", variable=self.head_on,
-                        command=self._update_start_btn).grid(row=0, column=0, sticky="w")
+        # ---------- 模块一：拼接素材（前贴 / 尾贴 / 封面） ----------
+        box1 = card(0, "拼接素材（每条成品独立随机抽取）")
+        # 前贴
+        ttk.Checkbutton(box1, text="前贴", variable=self.head_on).grid(row=0, column=0, sticky="w")
         ttk.Entry(box1, textvariable=self.head_dir_var).grid(row=0, column=1, sticky="ew", pady=2)
         hd = ttk.Frame(box1)
         hd.grid(row=0, column=2, padx=(10, 0))
@@ -273,11 +271,10 @@ class App(tk.Tk):
                     textvariable=self.head_count_var).pack(side="left", padx=(4, 2))
         ttk.Label(hd, text="个").pack(side="left")
         ttk.Button(hd, text="选文件夹…", width=10,
-                   command=lambda: self._pick_dir(self.head_dir_var, "选择片头视频文件夹")
+                   command=lambda: self._pick_dir(self.head_dir_var, "选择前贴视频文件夹")
                    ).pack(side="left", padx=(8, 0))
-        # 片尾
-        ttk.Checkbutton(box1, text="片尾", variable=self.tail_on,
-                        command=self._update_start_btn).grid(row=1, column=0, sticky="w")
+        # 尾贴
+        ttk.Checkbutton(box1, text="尾贴", variable=self.tail_on).grid(row=1, column=0, sticky="w")
         ttk.Entry(box1, textvariable=self.tail_dir_var).grid(row=1, column=1, sticky="ew", pady=2)
         tl = ttk.Frame(box1)
         tl.grid(row=1, column=2, padx=(10, 0))
@@ -286,39 +283,37 @@ class App(tk.Tk):
                     textvariable=self.tail_count_var).pack(side="left", padx=(4, 2))
         ttk.Label(tl, text="个").pack(side="left")
         ttk.Button(tl, text="选文件夹…", width=10,
-                   command=lambda: self._pick_dir(self.tail_dir_var, "选择片尾视频文件夹")
+                   command=lambda: self._pick_dir(self.tail_dir_var, "选择尾贴视频文件夹")
+                   ).pack(side="left", padx=(8, 0))
+        # 封面：随机取 1 张图片，替换成片第 0 帧
+        ttk.Checkbutton(box1, text="封面", variable=self.cover_on).grid(row=2, column=0, sticky="w")
+        ttk.Entry(box1, textvariable=self.cover_dir_var).grid(row=2, column=1, sticky="ew", pady=2)
+        cv = ttk.Frame(box1)
+        cv.grid(row=2, column=2, padx=(10, 0))
+        ttk.Label(cv, text="随机取 1 张").pack(side="left")
+        ttk.Button(cv, text="选文件夹…", width=10,
+                   command=lambda: self._pick_dir(self.cover_dir_var, "选择封面图片文件夹")
                    ).pack(side="left", padx=(8, 0))
 
-        # ---------- 模块二：混淆视频 ----------
-        box2 = card(1, "混淆视频")
-        # 勾选 = 对这些视频做混淆
-        ttk.Checkbutton(box2, text="视频", variable=self.ob_on,
-                        command=self._update_start_btn).grid(row=0, column=0, sticky="w")
-        # 视频路径 + 混淆份数（同一行）+ 选文件夹
-        ttk.Entry(box2, textvariable=self.dir_var).grid(row=0, column=1, sticky="ew", pady=2)
-        ob = ttk.Frame(box2)
-        ob.grid(row=0, column=2, padx=(10, 0))
-        ttk.Label(ob, text="混淆成").pack(side="left")
-        ttk.Spinbox(ob, from_=1, to=FISSION_MAX_COUNT, width=4,
-                    textvariable=self.ob_count_var).pack(side="left", padx=(4, 2))
-        ttk.Label(ob, text="份").pack(side="left")
+        # ---------- 模块二：搬运视频 ----------
+        box2 = card(1, "搬运视频（一个搬运出一条成品）")
+        ttk.Entry(box2, textvariable=self.dir_var).grid(row=0, column=0, columnspan=3,
+                                                        sticky="ew", pady=2)
         ttk.Button(box2, text="选文件夹…", width=10,
-                   command=lambda: self._pick_dir(self.dir_var, "选择视频文件夹")
+                   command=lambda: self._pick_dir(self.dir_var, "选择搬运视频文件夹")
                    ).grid(row=0, column=3, padx=(10, 0))
-        # 处理数量 slider + 混淆算法（radio 单选，按日期命名）同一行
-        algo_row = ttk.Frame(box2)
-        algo_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Label(algo_row, text="只混淆前").pack(side="left")
-        self.limit_scale = ttk.Scale(algo_row, from_=1, to=1, length=150,
+        limit_row = ttk.Frame(box2)
+        limit_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(limit_row, text="只处理前").pack(side="left")
+        self.limit_scale = ttk.Scale(limit_row, from_=1, to=1, length=180,
                                      variable=self.limit_var,
                                      command=lambda *_: self._update_limit_label())
         self.limit_scale.pack(side="left", padx=(4, 4))
-        self.limit_label = ttk.Label(algo_row, text="—", width=16, anchor="w")
+        self.limit_label = ttk.Label(limit_row, text="—", width=18, anchor="w")
         self.limit_label.pack(side="left")
-        ttk.Label(algo_row, text="混淆算法：").pack(side="left", padx=(12, 0))
-        for name, algo in ALGORITHMS.items():
-            ttk.Radiobutton(algo_row, text=algo["label"], value=name,
-                            variable=self.ob_algorithm).pack(side="left", padx=(4, 0))
+        ttk.Label(box2, text="每条成品 = 封面 + 前贴×N + 搬运 + 尾贴×N，再按 22 的方式处理",
+                  style="Muted.TLabel").grid(row=2, column=0, columnspan=4,
+                                             sticky="w", pady=(6, 0))
 
         # ---------- 同时处理 + 输出到（靠左）；开始处理（最右） ----------
         bar = ttk.Frame(root)
@@ -370,7 +365,7 @@ class App(tk.Tk):
             self._save_settings()
 
     def _refresh_limit(self, *_):
-        """混淆视频文件夹变化时：重算视频总数，slider 量程随之更新并重置为总数。"""
+        """搬运文件夹变化时：重算视频总数，slider 量程随之更新并重置为总数。"""
         d = self.dir_var.get().strip()
         try:
             n = len(_list_videos(d)) if d and os.path.isdir(d) else 0
@@ -379,14 +374,15 @@ class App(tk.Tk):
         self._video_total = n
         if n > 0:
             self.limit_scale.configure(state="normal", from_=1, to=n)
-            self.limit_var.set(n)          # 默认 = 文件夹里视频总数
+            self.limit_var.set(n)          # 默认 = 文件夹里视频总数（全都处理）
         else:
             self.limit_scale.configure(state="disabled", from_=1, to=1)
             self.limit_var.set(1)
         self._update_limit_label()
+        self._update_start_btn()
 
     def _update_limit_label(self, *_):
-        """slider 旁的文案：「只混淆前 N 个（共 M 个）」；无视频时显示 —。"""
+        """slider 旁的文案：「N 个（共 M 个）」；无视频时显示 —。"""
         total = self._video_total
         try:
             v = int(float(self.limit_var.get()))
@@ -396,11 +392,11 @@ class App(tk.Tk):
                                    if total else "—")
 
     def _update_start_btn(self):
-        """三开关全关时禁用开始按钮；否则启用。"""
-        any_on = self.head_on.get() or self.tail_on.get() or self.ob_on.get()
+        """搬运目录里有视频、且 ffmpeg 可用时才允许开始。"""
         if self.running:
             return
-        self.btn_start.configure(state="normal" if any_on else "disabled")
+        ok = self._video_total > 0 and not self._no_ffmpeg
+        self.btn_start.configure(state="normal" if ok else "disabled")
 
     def _check_env(self):
         if not FFMPEG:
@@ -412,9 +408,10 @@ class App(tk.Tk):
             self.btn_start.configure(state="disabled")
             return
         stale = [label for label, path in (
-            ("主体视频目录", self.dir_var.get()),
-            ("片头目录", self.head_dir_var.get()),
-            ("片尾目录", self.tail_dir_var.get()),
+            ("搬运视频目录", self.dir_var.get()),
+            ("前贴目录", self.head_dir_var.get()),
+            ("尾贴目录", self.tail_dir_var.get()),
+            ("封面目录", self.cover_dir_var.get()),
             ("输出目录", self.out_dir_var.get()))
             if path and not os.path.isdir(path)]
         if stale:
@@ -441,21 +438,14 @@ class App(tk.Tk):
             messagebox.showerror("错误", "没有找到 ffmpeg，无法处理视频")
             return
 
-        head_on = self.head_on.get()
-        tail_on = self.tail_on.get()
-        ob_on = self.ob_on.get()
-        if not (head_on or tail_on or ob_on):
-            messagebox.showinfo("提示", "请至少开启片头、片尾或混淆中的一个功能")
-            return
-
         vdir = self.dir_var.get().strip()
         if not vdir or not os.path.isdir(vdir):
-            messagebox.showwarning("路径无效", f"主体视频文件夹不存在：{vdir or '（未选择）'}")
+            messagebox.showwarning("路径无效", f"搬运视频文件夹不存在：{vdir or '（未选择）'}")
             return
 
         files = _list_videos(vdir)
         if not files:
-            messagebox.showinfo("提示", "主体视频文件夹里没有找到视频文件")
+            messagebox.showinfo("提示", "搬运视频文件夹里没有找到视频文件")
             return
 
         # slider 限制：只处理排序后的前 N 个（默认 N = 全部）
@@ -466,24 +456,37 @@ class App(tk.Tk):
         if limit < len(files):
             files = files[:limit]
 
-        head_pool = tail_pool = []
+        head_on = self.head_on.get()
+        tail_on = self.tail_on.get()
+        cover_on = self.cover_on.get()
+
+        head_pool = tail_pool = cover_pool = []
         if head_on:
             hd = self.head_dir_var.get().strip()
             if not hd or not os.path.isdir(hd):
-                messagebox.showwarning("路径无效", f"片头文件夹不存在：{hd or '（未选择）'}")
+                messagebox.showwarning("路径无效", f"前贴文件夹不存在：{hd or '（未选择）'}")
                 return
             head_pool = _list_videos(hd)
             if not head_pool:
-                messagebox.showinfo("提示", "片头文件夹里没有找到视频文件")
+                messagebox.showinfo("提示", "前贴文件夹里没有找到视频文件")
                 return
         if tail_on:
             tl = self.tail_dir_var.get().strip()
             if not tl or not os.path.isdir(tl):
-                messagebox.showwarning("路径无效", f"片尾文件夹不存在：{tl or '（未选择）'}")
+                messagebox.showwarning("路径无效", f"尾贴文件夹不存在：{tl or '（未选择）'}")
                 return
             tail_pool = _list_videos(tl)
             if not tail_pool:
-                messagebox.showinfo("提示", "片尾文件夹里没有找到视频文件")
+                messagebox.showinfo("提示", "尾贴文件夹里没有找到视频文件")
+                return
+        if cover_on:
+            cd = self.cover_dir_var.get().strip()
+            if not cd or not os.path.isdir(cd):
+                messagebox.showwarning("路径无效", f"封面文件夹不存在：{cd or '（未选择）'}")
+                return
+            cover_pool = list_images(cd)
+            if not cover_pool:
+                messagebox.showinfo("提示", "封面文件夹里没有找到图片文件")
                 return
 
         try:
@@ -496,11 +499,6 @@ class App(tk.Tk):
         except Exception:
             tail_count = TL_DEFAULT_COUNT
         tail_count = max(1, min(TL_MAX_COUNT, tail_count)) if tail_on else 0
-        try:
-            ob_count = int(float(str(self.ob_count_var.get())))
-        except Exception:
-            ob_count = FISSION_DEFAULT_COUNT
-        ob_count = max(1, min(FISSION_MAX_COUNT, ob_count)) if ob_on else 1
         try:
             workers = int(float(str(self.workers_var.get())))
         except Exception:
@@ -524,55 +522,53 @@ class App(tk.Tk):
         self._clear_log()
 
         _total_all = self._video_total
-        self._log(f"开始处理：{len(files)} 个主体视频"
-                  + (f"（文件夹共 {_total_all} 个，按 slider 只处理前 {len(files)} 个）"
+        self._log(f"开始处理：{len(files)} 条成品"
+                  + (f"（搬运目录共 {_total_all} 个，按 slider 只处理前 {len(files)} 个）"
                      if 0 < len(files) < _total_all else "")
-                  + f"，每个裂变 {ob_count} 份，共 {len(files) * ob_count} 份，"
-                    f"同时处理 {workers} 个")
-        self._log(f"片头：{'开（随机拼 ' + str(head_count) + ' 个）' if head_on else '关'}")
-        self._log(f"片尾：{'开（随机拼 ' + str(tail_count) + ' 个）' if tail_on else '关'}")
-        self._log(f"混淆：{'开（本地不可播放，逐字复刻样本）' if ob_on else '关（输出标准 MP4）'}")
-        if ob_on:
-            self._log(f"混淆算法：{self.ob_algorithm.get()}")
+                  + f"，同时处理 {workers} 个")
+        self._log(f"前贴：{'开（每条随机拼 ' + str(head_count) + ' 个）' if head_on else '关'}")
+        self._log(f"尾贴：{'开（每条随机拼 ' + str(tail_count) + ' 个）' if tail_on else '关'}")
+        self._log(f"封面：{'开（每条随机取 1 张做第 0 帧）' if cover_on else '关'}")
+        self._log(f"混淆：复刻22（{DEFAULT_ALGORITHM}，本地不可播放、平台可播）")
         self._log(f"输出目录：{out_dir}")
-        self._log(f"分辨率固定：720x1276（对齐参考样本）")
+        self._log("分辨率固定：720x1276（对齐参考样本）")
 
         threading.Thread(
             target=self._worker,
-            args=(files, head_pool, tail_pool, out_dir, head_count, tail_count,
-                  ob_on, ob_count, workers, self.ob_algorithm.get()),
+            args=(files, head_pool, tail_pool, cover_pool, out_dir, head_count,
+                  tail_count, cover_on, workers),
             daemon=True).start()
 
-    def _worker(self, files, head_pool, tail_pool, out_dir, head_count, tail_count,
-                ob_on, ob_count, workers, algorithm):
-        """后台线程：并发处理。进度按真实个数（完成份数 / 总份数）汇报。"""
-        total = len(files) * ob_count
+    def _worker(self, files, head_pool, tail_pool, cover_pool, out_dir, head_count,
+                tail_count, cover_on, workers):
+        """后台线程：并发处理。一个搬运出一条成品，进度按真实条数汇报。"""
+        total = len(files)
         ok = fail = 0
         t0 = time.time()
         self.msg_q.put(("count", (0, total)))
-        threads = max(1, CPU_COUNT // max(1, min(workers, len(files))))
+        threads = max(1, CPU_COUNT // max(1, min(workers, total)))
 
-        def run_one(path):
-            nonlocal_ok = None
-            return process_one_fission(
-                path, head_pool, tail_pool, out_dir, FFMPEG, self.registry,
-                self.stop_event, head_count=head_count, tail_count=tail_count,
-                ob_on=ob_on, ob_count=ob_count, threads=threads,
-                log=self._log_q, tag=f"[{os.path.basename(path)}]",
-                algorithm=algorithm)
+        def run_one(idx, main):
+            return process_one_output(
+                main, idx, out_dir, FFMPEG, self.registry, self.stop_event,
+                head_pool=head_pool, tail_pool=tail_pool, cover_pool=cover_pool,
+                head_count=head_count, tail_count=tail_count, cover_on=cover_on,
+                threads=threads, log=self._log_q,
+                tag=f"[{os.path.basename(main)}]", algorithm=DEFAULT_ALGORITHM)
 
-        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(files)))) as ex:
-            futures = {ex.submit(run_one, f): f for f in files}
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, total))) as ex:
+            futures = {ex.submit(run_one, i, f): f
+                       for i, f in enumerate(files, start=1)}
             for fut in as_completed(futures):
                 name = os.path.basename(futures[fut])
                 try:
-                    outs = fut.result()
-                    ok += len(outs)
+                    fut.result()
+                    ok += 1
                 except CancelledError:
                     pass
                 except Exception as e:
                     if not self.stop_event.is_set():
-                        fail += ob_count
+                        fail += 1
                         self._log_q(f"[{name}] ✗ 失败：{e}")
                 self.msg_q.put(("count", (ok + fail, total)))
         self.msg_q.put(("done", (ok, fail, time.time() - t0)))
@@ -595,9 +591,9 @@ class App(tk.Tk):
         state = "已停止" if stopped else "全部完成"
         self._set_progress_text(state)
         done = ok + fail
-        self._log(f"—— {state}：成功 {ok} 份，失败 {fail} 份，"
+        self._log(f"—— {state}：成功 {ok} 条，失败 {fail} 条，"
                   f"总用时 {fmt_duration(cost)}"
-                  + (f"（平均每份 {fmt_duration(cost / done)}）" if done else "") + " ——")
+                  + (f"（平均每条 {fmt_duration(cost / done)}）" if done else "") + " ——")
 
     # ------------------------------------------------------ 日志/进度
     def _log(self, text):
@@ -667,6 +663,3 @@ class App(tk.Tk):
         if done:
             self._finish(done)
         self._poll_id = self.after(120, self._poll_queue)
-
-    # ------------------------------------------------------ 系统监控
-    # （已按用户要求移除 CPU/内存监控显示；sysmon.py 的采样工具保留备用）

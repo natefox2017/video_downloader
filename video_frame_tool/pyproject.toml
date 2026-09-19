@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-frame-tool"
-version = "2.0.0"
-description = "短视频批处理工具（GUI）：拼接片头片尾 + 容器混淆裂变，规避平台文件级查重"
+version = "3.1.0"
+description = "短视频批处理工具（GUI）：封面 + 前贴/尾贴拼接 + 复刻22 混淆（本地拒读、平台可播）"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Proprietary" }

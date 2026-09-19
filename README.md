@@ -127,23 +127,28 @@
 
 ## 功能
 
-把一批主体视频**裂变**成多份成品，三个功能（片头 / 片尾 / 混淆）各自独立开关、可任意组合：
+把搬运视频目录里的素材**逐条加工**成成品，每条的结构固定：
 
-| # | 功能 | 说明 |
+> **每条成品 = 封面 + 前贴×N + 搬运 + 尾贴×N → 拼接 → 复刻22 混淆**
+
+| # | 环节 | 说明 |
 |---|---|---|
-| 1 | **片头拼接**（可选） | 从片头目录随机抽 N 个视频拼在主体前面（每份独立随机） |
-| 2 | **片尾拼接**（可选） | 从片尾目录随机抽 N 个视频拼在主体后面（每份独立随机） |
-| 3 | **容器混淆**（可选） | 逐字复刻参考样本的容器改写，本地播放器拒读、平台（快手）重转码后可播 |
+| 1 | **前贴**（可选） | 从前贴目录随机抽 N 个视频拼在搬运前面（每条成品独立随机） |
+| 2 | **搬运** | 从搬运目录**按排序取**，**一个搬运出一条成品**，条数 = 界面「只处理前」滑块值 |
+| 3 | **尾贴**（可选） | 从尾贴目录随机抽 N 个视频拼在搬运后面（每条成品独立随机） |
+| 4 | **封面**（可选） | 从封面目录随机取 1 张图片，强制拉伸后替换拼接片的第 0 帧（时长/帧数不变） |
+| 5 | **复刻22 混淆** | 上下场混合（偶行铺静态色块、奇行放原画）+ 容器改写：本地播放器拒读、平台重转码后可播 |
 
 关键规则：
 
-- 三开关全关时禁用「开始」，开始/停止合并为一个按钮；
-- 输出固定为主体目录下的 `out/`，命名 = 主体名 + `_` + 两位序号（`foo_01.mp4` ~ `foo_99.mp4`）；
-- 分辨率固定 **720×1276**（对齐参考样本），不随片头/主体/片尾变化；
-- 每份产物**独立随机**（重编码 CRF 抖动 + 随机假元数据 + 随机 Void 填充），保证同一视频裂变 N 份的文件哈希必不同；
-- 总产出 = 主体视频数 × 混淆份数。
+- 主流程只有一条：**拼接 → 复刻22 混淆**，没有分支；
+- 搬运目录里有视频才启用「开始」，开始/停止合并为一个按钮；
+- 输出目录默认 `~/Desktop/out`（可用「输出到」更改，不存在自动新建），命名 = 搬运名 + `_` + 两位序号；
+- 分辨率固定 **720×1276 / 30fps**（对齐参考样本 22.mp4），不随前贴/搬运/尾贴变化；
+- 每条产物**哈希必不同**（色块图种子 + 容器 DateUTC 各自随机/取当前时刻）。
 
-界面底部有**实时资源监控**（整机 CPU / 内存，每秒刷新）。
+> 早先做过的「改音色」「加噪点」两个开关及其代码已在 2026-09-19 删除（实测对查重帮助有限），
+> 历史实现见 git 历史与项目根 `复刻22_已验证备份_20260919/`。
 
 ## 环境要求
 
@@ -160,13 +165,13 @@ Python 工具已从仓库根的单文件拆成独立子项目 **`video_frame_too
 
 ```bash
 cd video_frame_tool
-./run.sh                                       # 一键启动（免安装，含环境自检）
-PYTHONPATH=src python3 -m video_frame_tool     # 免安装，直接跑
+./run.sh                          # 一键启动（免安装，含环境自检）
+PYTHONPATH=. python3 -m src       # 免安装，直接跑
 # 或者装成命令：
 pip install -e . && video-frame-tool
 ```
 
-`run.sh` 会自己把 `src` 挂到 `PYTHONPATH` 再启动，**不需要先安装**；启动前顺带检查 Python / tkinter / ffmpeg，
+`run.sh` 会自己把项目根挂到 `PYTHONPATH` 再启动（`-m src`），**不需要先安装**；启动前顺带检查 Python / tkinter / ffmpeg，
 并**自动挑一个真正带 tkinter 的解释器**（macOS 上 Homebrew 的 python3 常缺 `python-tk`，会自动改用 conda 或系统自带的）。
 指定解释器：`PYTHON=/path/to/python3 ./run.sh`。
 
@@ -174,7 +179,7 @@ pip install -e . && video-frame-tool
 ## 开发与贡献
 
 - **无构建步骤**：扩展改完代码在 `chrome://extensions/` 点刷新；Python 工具是独立子项目
-  `video_frame_tool/`，`PYTHONPATH=src python3 -m video_frame_tool` 直接跑。
+  `video_frame_tool/`，`PYTHONPATH=. python3 -m src` 直接跑。
 - **提交前自检**（CI 也在跑同样的检查）：
   ```bash
   node --check background.js && node --check content.js \
@@ -186,7 +191,7 @@ pip install -e . && video-frame-tool
 - 改到界面/图标相关代码时，**两个 Tk 版本都要验**（macOS 系统 Tk 8.5 与 Homebrew/托管 Python 的 Tk 8.6+）：
   ```bash
   # 打印 logo 来源与尺寸：Tk 8.5 应显示「（PPM 回退）」，Tk 8.6+ 显示原生路径
-  PYTHONPATH=video_frame_tool/src /usr/bin/python3 -c "import tkinter as tk; import video_frame_tool as m; tk.Tk().withdraw(); print(tk.TkVersion, m.load_logo(64))"
+  PYTHONPATH=video_frame_tool /usr/bin/python3 -c "import tkinter as tk; import src as m; tk.Tk().withdraw(); print(tk.TkVersion, m.load_logo(64))"
   ```
 - 改动较大的功能建议在 commit message 里说明「改了什么 + 为什么」，涉及性能的改动请附实测数据。
 - 面向 AI 编码助手的项目约定、架构不变量与易踩坑点见 [AGENTS.md](AGENTS.md)。

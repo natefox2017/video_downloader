@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 
-from .constants import VIDEO_EXTS
+from .constants import IMAGE_EXTS, VIDEO_EXTS
 from .ffmpeg_bin import FFMPEG, FFPROBE
 
 # ============================================================================
@@ -111,12 +111,51 @@ def probe_media(path):
             "has_audio": bool(acodecs), "acodecs": [c for c in acodecs if c]}
 
 
+def probe_frames(path):
+    """读视频流的解码帧数（fieldmix 要按「源帧数 - 1」截帧，必须先数准）。
+
+    先读容器的 nb_frames（快）；读不到或为 0 时退化为逐帧计数（慢但准）。
+    任何失败都返回 0 —— 调用方据此放弃截帧，而不是让整条流程崩掉。
+    """
+    try:
+        out = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=nb_frames",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=120)
+        n = int(str(out.stdout).strip() or 0)
+        if n > 0:
+            return n
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    try:
+        out = subprocess.run(
+            [FFPROBE, "-v", "error", "-count_frames", "-select_streams", "v:0",
+             "-show_entries", "stream=nb_read_frames",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=1800)
+        return max(0, int(str(out.stdout).strip() or 0))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
 def _list_videos(folder):
     """列出目录内的视频文件（不递归），返回排序后的绝对路径列表"""
     try:
         with os.scandir(folder) as entries:
             return sorted(entry.path for entry in entries
                           if os.path.splitext(entry.name)[1].lower() in VIDEO_EXTS
+                          and entry.is_file())
+    except Exception:
+        return []
+
+
+def list_images(folder):
+    """列出目录内的图片文件（不递归），返回排序后的绝对路径列表（封面功能用）"""
+    try:
+        with os.scandir(folder) as entries:
+            return sorted(entry.path for entry in entries
+                          if os.path.splitext(entry.name)[1].lower() in IMAGE_EXTS
                           and entry.is_file())
     except Exception:
         return []
