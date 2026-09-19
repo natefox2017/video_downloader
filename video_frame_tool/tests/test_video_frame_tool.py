@@ -144,10 +144,14 @@ def check_fieldmix_recipe():
     cmd = core_obfuscate._encode_cmd_fieldmix(tool.FFMPEG, 'in.mp4', 'out.mkv',
                                               frames=929)
     filters = cmd[cmd.index('-filter_complex') + 1]
-    # 偶行铺色块、奇行放原画；第 0 帧两场都用原画（否则封面就是彩虹横纹）
-    assert "if(eq(mod(Y,2),0),if(lt(N,1.5),A,B),A)" in filters, filters
-    # blend 的 N 从 1 起算，写成 lt(N,1) 永远不生效 —— 这条是踩过的坑，必须守住
-    assert "lt(N,1)=" not in filters
+    # 色块图自带「偶行不透明」的 alpha 遮罩，overlay 一次覆盖偶行、奇行保留原画
+    assert "a='if(eq(mod(Y,2),0),255,0)'" in filters, filters
+    assert "overlay=format=yuv444" in filters, filters
+    # 第 0 帧两场都用原画（否则封面就是彩虹横纹）：
+    # overlay 的 enable 用从 0 起算的 n，写 gte(n,1) 才是「第 0 帧不动」
+    assert "enable='gte(n,1)'" in filters, filters
+    # 逐像素判行奇偶的旧写法必须彻底消失（它是编码耗时的大头，别再退回去）
+    assert "blend=all_expr" not in filters, filters
     assert "loop=loop=-1" in filters, '色块图必须循环复用'
     assert "setfield=bff" in filters and "interl=1" in filters, filters
     assert cmd[cmd.index('-top') + 1] == '0', '画面写 BFF'

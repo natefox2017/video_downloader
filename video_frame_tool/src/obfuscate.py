@@ -6,6 +6,8 @@
   fieldmix（唯一算法，2026-09-19 逐场逆向 22.mp4 得出）
       画面：偶行场铺一张静态强彩色色块图、奇行场放原画面，**第 0 帧整帧保留原画**
             （平台用第一帧取封面，第 0 帧若是色块，成品封面就是彩虹横纹）；
+            色块图自带「偶行不透明」的 alpha 遮罩，靠 overlay 一次覆盖完成，
+            不逐像素判行奇偶（合成开销降到原来的 ~1/4，输出逐帧一致）；
             写 BFF 场序 + 真隔行编码，容器 FieldOrder 仍伪装成 TFF。
       容器：Duration 写死 1032ms、Tags DURATION 写死 "00:00:01.121"，与样本一致。
 
@@ -181,24 +183,37 @@ def _now_date_ns():
 FIELD_DURATION_MS = 1032.0                        # 容器 Duration 写死值（样本如此）
 FIELD_DUR_TEXT = b"00:00:01.121000000\x00"        # Tags DURATION 写死值（样本如此）
 
-# blend 的 N **从 1 起算**（实测 lt(N,1) 永远不生效、lt(N,1.5) 生效），
-# 所以判断「第 0 帧」必须写 N<1.5 —— 写成 N<1 会让第 0 帧照样叠色块，封面就毁了。
-_BLEND_EXPR = "if(eq(mod(Y,2),0),if(lt(N,1.5),A,B),A)"
+# 第 0 帧整帧保留原画：平台用第一帧取封面，不能让它看到色块。
+# overlay 的 enable 用的是**从 0 起算**的帧号 n（与 blend 的 N 从 1 起算不同），
+# 所以这里直接写 n>=1。曾用 blend + 逐像素表达式，2026-09-19 为了提速改成
+# 「alpha 行遮罩 + overlay」（见 _fieldmix_pattern 的注释），实测同一素材逐帧 bit-exact。
+_OVERLAY_EXPR = "gte(n,1)"
+# 色块图的行遮罩：偶行完全不透明（盖住原画），奇行全透明（保留原画）。
+_ALPHA_MASK = "if(eq(mod(Y,2),0),255,0)"
 
 
 def _fieldmix_pattern(seed):
-    """生成一整张静态强彩色色块图（每次调用重新随机 → 每个成品图案都不同）。
+    """生成一整张静态强彩色色块图，并把「偶行可见」写进 alpha 通道（每次调用重新随机）。
 
     只出 1 帧再 loop 复用：避免逐帧重算导致闪烁与码率暴涨。
+
+    提速要点（2026-09-19）：原先用 `blend=all_expr='if(eq(mod(Y,2),0),...)'` 逐像素
+    求值判行奇偶，实测占单条编码 CPU 的 ~70%（20s 片段 55.6s CPU → 16.2s）。
+    现在改成「色块图自带 alpha 行遮罩 + overlay」，行奇偶判断退化成一次性的
+    1 帧遮罩生成，合成时只做 SIMD 覆盖，**输出逐帧 bit-exact 不变**。
     """
     return (
         "nullsrc=size=%sx%s:rate=%s,trim=end_frame=1,format=gbrp,"
         "geq=r='160+50*sin(floor(X/90)*12.9898+floor(Y/90)*78.233+%d)':"
         "g='167+50*sin(floor(X/90)*39.3468+floor(Y/90)*11.135+%d)':"
         "b='155+50*sin(floor(X/90)*73.156+floor(Y/90)*52.235+%d)',"
-        "boxblur=30:2,format=yuv444p,loop=loop=-1:size=1:start=0,"
-        "setpts=N/(%s*TB)[pat]"
-    ) % (CLONE_W, CLONE_H, CLONE_FPS, seed, seed + 1, seed + 2, CLONE_FPS)
+        "boxblur=30:2,format=yuv444p,format=yuva444p,"
+        # geq 在 yuv 系要写 lum/cb/cr 名字（写 y/u/v 会报 Option not found）；
+        # p(X,Y) 取原像素，只把 alpha 换成行遮罩。
+        "geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='%s',"
+        "loop=loop=-1:size=1:start=0,setpts=N/(%s*TB)[pat]"
+    ) % (CLONE_W, CLONE_H, CLONE_FPS, seed, seed + 1, seed + 2,
+         _ALPHA_MASK, CLONE_FPS)
 
 
 def _encode_cmd_fieldmix(ffmpeg, src, mid, frames=None):
@@ -212,7 +227,8 @@ def _encode_cmd_fieldmix(ffmpeg, src, mid, frames=None):
         % (CLONE_W, CLONE_H, CLONE_FPS)
         + _fieldmix_pattern(seed) + ";"
         # 第 0 帧两场都用原画：平台用第一帧取封面，不能让它看到色块。
-        "[src][pat]blend=all_expr='%s':shortest=1," % _BLEND_EXPR
+        # format=yuv444 必须显式写：默认 auto 会走 RGB 混合，YUV<->RGB 往返会有 ±1 级误差。
+        "[src][pat]overlay=format=yuv444:enable='%s':shortest=1," % _OVERLAY_EXPR
         # 转 4:2:0 时必须按隔行场分别采样色度，否则强彩色上场会污染原画下场。
         + "setfield=bff,scale=%s:%s:interl=1,format=yuv420p[v]"
         % (CLONE_W, CLONE_H)
