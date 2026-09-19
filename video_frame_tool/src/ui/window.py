@@ -34,7 +34,7 @@ from ..obfuscate import DEFAULT_ALGORITHM
 from ..logo import load_logo
 from ..platform_compat import IS_MACOS, PLATFORM, mono_font_family
 from ..probe import _list_videos, list_images
-from ..proc import ProcRegistry, fmt_duration
+from ..proc import ProcRegistry, blend_progress, fmt_duration
 from ..settings import load_settings, save_settings
 
 # ============================================================================
@@ -538,26 +538,63 @@ class App(tk.Tk):
 
     def _worker(self, files, head_pool, tail_pool, cover_pool, out_dir, head_count,
                 tail_count, cover_on, workers):
-        """后台线程：并发处理。一个搬运出一条成品，进度按真实条数汇报。"""
+        """后台线程：并发处理。一个搬运出一条成品。
+
+        进度 = 「已完成条数 + 各在跑条目的本条完成度」/ 总条数：每条成品内部
+        （拼接各段 / 复刻22 混淆）都会把 ffmpeg 汇报的**真实编码秒数**折算成
+        0~1 报上来（见 fission.process_one_output 的 on_progress），所以开工后
+        进度条就从 0 平滑往上走，不会「前面一直不动、快结束才跳」。
+        """
         total = len(files)
         ok = fail = 0
         t0 = time.time()
         self.msg_q.put(("count", (0, total)))
         threads = max(1, CPU_COUNT // max(1, min(workers, total)))
 
+        lock = threading.Lock()
+        live = {}                  # 在跑的条目：idx -> 本条完成度 0~1
+        done_cnt = [0]
+        last_pct = [0.0]
+
+        def publish(force=False):
+            """把总完成度推给界面：算与入队都在同一把锁里，保证进度只增不减。
+
+            多个 worker 线程会并发上报，若把入队放到锁外，先后算出的两个值
+            可能反序进队，界面就会出现「98% 掉回 75%」的倒走。
+            """
+            with lock:
+                pct = blend_progress(done_cnt[0], live.values(), total)
+                if pct < last_pct[0]:          # 并发错位算出的回退值直接丢
+                    return
+                if not force and pct - last_pct[0] < 0.2:
+                    return
+                last_pct[0] = pct
+                self.msg_q.put(("progress", pct))
+
         def run_one(idx, main):
-            return process_one_output(
-                main, idx, out_dir, FFMPEG, self.registry, self.stop_event,
-                head_pool=head_pool, tail_pool=tail_pool, cover_pool=cover_pool,
-                head_count=head_count, tail_count=tail_count, cover_on=cover_on,
-                threads=threads, log=self._log_q,
-                tag=f"[{os.path.basename(main)}]", algorithm=DEFAULT_ALGORITHM)
+            def report(frac):
+                with lock:
+                    live[idx] = frac
+                publish()
+
+            try:
+                return process_one_output(
+                    main, idx, out_dir, FFMPEG, self.registry, self.stop_event,
+                    head_pool=head_pool, tail_pool=tail_pool, cover_pool=cover_pool,
+                    head_count=head_count, tail_count=tail_count, cover_on=cover_on,
+                    threads=threads, log=self._log_q,
+                    tag=f"[{os.path.basename(main)}]", algorithm=DEFAULT_ALGORITHM,
+                    on_progress=report)
+            finally:
+                with lock:
+                    live.pop(idx, None)
 
         with ThreadPoolExecutor(max_workers=max(1, min(workers, total))) as ex:
-            futures = {ex.submit(run_one, i, f): f
+            futures = {ex.submit(run_one, i, f): (i, f)
                        for i, f in enumerate(files, start=1)}
             for fut in as_completed(futures):
-                name = os.path.basename(futures[fut])
+                idx, path = futures[fut]
+                name = os.path.basename(path)
                 try:
                     fut.result()
                     ok += 1
@@ -567,7 +604,12 @@ class App(tk.Tk):
                     if not self.stop_event.is_set():
                         fail += 1
                         self._log_q(f"[{name}] ✗ 失败：{e}")
-                self.msg_q.put(("count", (ok + fail, total)))
+                with lock:
+                    done_cnt[0] += 1
+                    live.pop(idx, None)
+                self.msg_q.put(("count", (done_cnt[0], total)))
+                publish(force=True)
+        publish(force=True)
         self.msg_q.put(("done", (ok, fail, time.time() - t0)))
 
     def _stop(self):
@@ -639,7 +681,7 @@ class App(tk.Tk):
 
     # ------------------------------------------------------ 消息泵
     def _poll_queue(self):
-        logs, count, done = [], None, None
+        logs, count, prog, done = [], None, None, None
         try:
             while True:
                 kind, payload = self.msg_q.get_nowait()
@@ -647,15 +689,21 @@ class App(tk.Tk):
                     logs.append(payload)
                 elif kind == "count":
                     count = payload
+                elif kind == "progress":
+                    prog = payload
                 elif kind == "done":
                     done = payload
         except queue.Empty:
             pass
         if count is not None:
             d, t = count
-            self.progress.configure(mode="determinate", maximum=100,
-                                    value=self._percent(d, t))
             self.progress_text.configure(text=f"{d}/{t}")
+            # 有细粒度进度时进度条交给它，否则退回「已完成条数」的粗进度
+            if prog is None:
+                self.progress.configure(mode="determinate", maximum=100,
+                                        value=self._percent(d, t))
+        if prog is not None:
+            self.progress.configure(mode="determinate", maximum=100, value=prog)
         self._log_batch(logs)
         if done:
             self._finish(done)

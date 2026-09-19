@@ -84,6 +84,7 @@ from .probe import (
 
 from .proc import (
     ProcRegistry,
+    blend_progress,
     fmt_duration,
 )
 from .proc import (

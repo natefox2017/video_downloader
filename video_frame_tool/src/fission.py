@@ -33,6 +33,12 @@ from .proc import _run
 # 一、参数
 # ============================================================================
 
+# 一条成品的耗时有两块：拼接（前贴/搬运/尾贴各段重编码 + 无损合并）与
+# 复刻22 混淆（整条再重编码 + 改容器）。两块的重编码像素量都等于影片长度，
+# 所以耗时大致相当，按这个比例把两块进度合成「本条完成度」上报给界面。
+# 没有前贴/尾贴/封面（只有一条搬运）时跳过拼接，整条进度都由混淆贡献。
+CONCAT_WEIGHT = 0.45
+
 
 def pick_segments(pool, count, rng=random):
     """从前贴/尾贴池里随机挑 count 个（够挑无放回，不够有放回凑满）。返回新列表。"""
@@ -153,7 +159,7 @@ def concat_segments(segments, out_path, ffmpeg, registry, stop_event,
 def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
                        head_pool=None, tail_pool=None, cover_pool=None,
                        head_count=0, tail_count=0, cover_on=False, threads=2,
-                       log=None, tag="", algorithm=None):
+                       log=None, tag="", algorithm=None, on_progress=None):
     """生成 1 条成品：封面 + 随机前贴 + 搬运 + 随机尾贴 → 拼接 → 复刻22 混淆。
 
     main:        这条成品用的搬运视频。调用方决定取哪一条（界面按顺序取搬运目录前 N 个）。
@@ -162,6 +168,8 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
     head_count/tail_count: 本条随机抽几个前贴/尾贴（0 = 该部分不生效）。
     cover_pool:  封面图候选池；cover_on 为真时随机取 1 张替换拼接片第 0 帧。
     algorithm:   混淆算法名（见 obfuscate.ALGORITHMS）；None 用默认（复刻22）。
+    on_progress: 本条成品的真实完成度回调（0~1）。拼接与混淆两块按 CONCAT_WEIGHT
+                 加权合成，数据全部来自 ffmpeg 汇报的已编码秒数（不是估算）。
 
     返回成品路径。失败时抛异常（由调用方记日志），不吞错误。
     """
@@ -193,6 +201,19 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
             raise RuntimeError(f"读取视频失败 {os.path.basename(p)}：{e}")
         segments.append((p, info["has_audio"], float(info.get("duration") or 0.0)))
 
+    total_dur = sum(d for _, _, d in segments)
+
+    # ---- 进度：拼接占前 CONCAT_WEIGHT 段，混淆占剩下的；无拼接时全算混淆 ----
+    concat_w = CONCAT_WEIGHT if (cover or heads or tails) else 0.0
+
+    def _report_concat(frac):
+        if on_progress:
+            on_progress(min(1.0, max(0.0, frac) * concat_w))
+
+    def _report_ob(frac):
+        if on_progress:
+            on_progress(min(1.0, concat_w + max(0.0, frac) * (1.0 - concat_w)))
+
     parts = []
     if cover:
         parts.append("封面")
@@ -210,13 +231,16 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
             # 有封面/前贴/尾贴 → 拼成标准 MP4 中间件（已统一成 720x1276/30fps）
             mid = os.path.join(work_dir, "joined.mp4")
             concat_segments(segments, mid, ffmpeg, registry, stop_event,
-                            threads=threads, log=log, tag=tag, cover=cover)
+                            threads=threads, log=log, tag=tag, cover=cover,
+                            progress=_report_concat if on_progress else None)
         else:
             # 只有搬运：fieldmix 自己会把画面缩放到成品规格，不必先拼一遍
             mid = main
 
         _stopped()
         process_video(mid, out_dir, ffmpeg, registry, stop_event,
+                      duration=total_dur,
+                      on_progress=_report_ob if on_progress else None,
                       log=log, tag=tag, out_name=name, algorithm=algorithm)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

@@ -250,6 +250,91 @@ def check_probe_and_run():
     print('probe_media / probe_frames 与 _run 错误处理检查通过')
 
 
+def check_progress_reporting():
+    """进度：总进度公式 + 单条成品内部按真实编码秒数持续上报。
+
+    这条防的是「进度条前面一直不动、快结束才跳」——那时进度只按整条完成数走，
+    一条要做几分钟，前几分钟看着就像卡死。
+    """
+    # ---- 总进度 =（已完成条数 + 各在跑条目的本条完成度）/ 总条数 ----
+    bp = tool.blend_progress
+    assert bp(0, [], 10) == 0.0, bp(0, [], 10)
+    assert bp(0, [0.5], 10) == 5.0, bp(0, [0.5], 10)
+    assert abs(bp(3, [0.5, 0.5], 10) - 40.0) < 1e-9, bp(3, [0.5, 0.5], 10)
+    assert bp(10, [], 10) == 100.0, bp(10, [], 10)
+    assert bp(0, [], 0) == 0.0, '总数为 0 不能除零'
+    assert bp(0, [2.0], 1) == 100.0, '越界值要夹到 0~100'
+
+    # ---- 单条成品：开工后进度就得开始涨，只增不减，最终到 1 ----
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        src = root / 'm.mp4'
+        make_clip(src, 'red', 2.0, size='720x1280')
+        out = root / 'out'
+        out.mkdir()
+        marks = []
+        fission.process_one_output(
+            str(src), 1, str(out), tool.FFMPEG, tool.ProcRegistry(),
+            threading.Event(), threads=2, on_progress=marks.append)
+        assert len(marks) >= 2, ('单条处理过程应有多次进度回报', marks)
+        assert marks[0] > 0, ('第一条进度在前段就要为正，不能憋到最后', marks)
+        assert all(b >= a - 1e-9 for a, b in zip(marks, marks[1:])), marks
+        assert abs(marks[-1] - 1.0) < 1e-9, marks
+
+    # ---- 界面侧聚合：真跑一遍 App._worker 的消息产出（不需要 Tk 窗口）----
+    try:
+        from src.ui.window import App
+    except Exception as exc:                      # 没有 tkinter 的环境跳过这段
+        print('进度上报：总进度公式与单条真实进度检查通过（无 tkinter，跳过界面聚合）')
+        return
+
+    class _Q:
+        """顶替 UI 消息队列（_worker 只往进推，不需要 get 语义）。"""
+
+        def __init__(self):
+            self.items = []
+
+        def put(self, item):
+            self.items.append(item)
+
+    class _Stub:
+        """只提供 _worker 用到的几个属性，避免真的拉起一个 Tk 窗口。"""
+
+        _percent = staticmethod(
+            lambda d, t: 100.0 * float(d) / float(t) if t else 0.0)
+
+        def __init__(self):
+            self.msg_q = _Q()
+            self.registry = tool.ProcRegistry()
+            self.stop_event = threading.Event()
+            self._log_q = lambda text: None
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        out = root / 'out'
+        out.mkdir()
+        files = []
+        for i in range(4):
+            p = root / f'm{i}.mp4'
+            make_clip(p, 'red', 1.2, size='720x1280')
+            files.append(str(p))
+
+        stub = _Stub()
+        # 并发 4 是为了覆盖「多线程并发上报导致进度倒走」那个坑：
+        # 算值入队必须同锁，且只增不减
+        App._worker(stub, files, [], [], [], str(out), 0, 0, False, 4)
+        msgs = stub.msg_q.items
+        prog = [float(p) for k, p in msgs if k == 'progress']
+        assert prog, '批处理过程中必须持续上报总进度'
+        assert all(b >= a - 1e-9 for a, b in zip(prog, prog[1:])), prog
+        assert 0 < prog[0] < 100, ('开工后第一次上报就要是进行中的值', prog[0])
+        assert abs(prog[-1] - 100.0) < 1e-9, prog
+        counts = [p for k, p in msgs if k == 'count']
+        assert counts[-1] == (4, 4), counts
+        assert any(k == 'done' for k, _ in msgs), msgs[-3:]
+    print('进度上报：总进度公式、单条真实进度、界面聚合检查通过')
+
+
 if __name__ == '__main__':
     check_naming_and_pick()
     check_concat_segments()
@@ -257,4 +342,5 @@ if __name__ == '__main__':
     check_fieldmix_recipe()
     check_fieldmix_end_to_end()
     check_probe_and_run()
+    check_progress_reporting()
     print('全部回归检查通过')

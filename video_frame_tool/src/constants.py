@@ -31,10 +31,12 @@ OUT_AUDIO_ARGS = ("-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2")
 CPU_COUNT = os.cpu_count() or 4
 LOG_MAX_LINES = 20
 
-# ---- 并发数（界面不持久化，每次启动按 CPU 自动算默认值） ----
-# 每个 ffmpeg 的线程配额 = CPU_COUNT // workers，默认取核数一半 → 每个 ffmpeg 约 2 线程。
+# ---- 并发数（界面不持久化，每次启动用这个默认值） ----
+# 默认 4：一条成品的耗时几乎全在「拼接各段重编码 + 复刻22 整条重编码」上，
+# 实测并发 4 路 ≈ 1.9x（8 路与 4 路持平，再往上没有收益、只是更吃内存）。
+# 每个 ffmpeg 的线程配额 = CPU_COUNT // workers，见 ui/window.py 的 _worker。
 WORKERS_MAX = 8
-WORKERS_DEFAULT = max(1, min(WORKERS_MAX, CPU_COUNT // 2))
+WORKERS_DEFAULT = max(1, min(WORKERS_MAX, 4))
 
 # ---- 配置文件结构（默认值的唯一来源：上面的常量） ----
 SETTINGS_VERSION = 3

@@ -63,6 +63,23 @@ def _read_out_time(line, expected_dur):
     return min(1.0, secs / expected_dur)
 
 
+def blend_progress(done, parts, total):
+    """批处理总完成度（0~100 的百分比）。
+
+    done:  已经整条做完的成品条数
+    parts: 各条正在跑的成品的最新完成度（每条 0~1），来自 _read_out_time 折算的
+           真实编码秒数（一条成品内部还会按拼接/混淆加权，见 fission）
+    total: 本次要生成的总条数
+
+    界面据此让进度条**从开工第一秒就平滑往前爬**，而不是每做完一整条才跳一格
+    （后者在前面几分钟里会一直显示同一个数字，看着像卡死）。
+    """
+    if total <= 0:
+        return 0.0
+    frac = (float(done) + sum(float(p) for p in parts)) / float(total)
+    return max(0.0, min(100.0, frac * 100.0))
+
+
 def _run(cmd, registry, on_progress=None, expected_dur=0.0):
     """
     执行一条 ffmpeg 命令并等待结束。
