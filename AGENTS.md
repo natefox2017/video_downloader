@@ -68,13 +68,11 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
    - 前贴/尾贴：从各自目录随机抽 N 个视频（N 由界面 Spinbox 定，**每条成品独立随机**）；
    - 搬运：搬运目录里**按排序取**的前若干个，**一个搬运出一条成品**，条数 = 界面「只处理前」滑块值；
    - 封面：从封面目录随机取 1 张图片，**强制拉伸**替换拼接片第 0 帧（时长/帧数不变，每条独立随机）；
-   - 界面**没有**「改音色 / 加噪点 / 混淆算法切换」开关（2026-09-19 用户要求下掉）；
-     **对应代码也已在 09-19 晚按用户要求删除**（含独立命令行脚本 `obfuscate_cli.py` 与旧算法 `260917`）。
-     要找回改音色 / 加噪点 / 命令行版：看项目根 `复刻22_已验证备份_20260919/` 或 git 历史，**不要凭记忆重写**。
    - 界面固定用 `obfuscate.DEFAULT_ALGORITHM`（= `fieldmix`），`ALGORITHMS` 表里目前只有它一个。
 4. **成品规格锁死为参考样本 720×1276 / 30fps**，不随前贴/搬运/尾贴变化。
    各段先重编码成统一规格（缩放补黑边 + 补静音轨），再 concat demuxer `-c copy` 无损拼接。
    封面是「替换第 0 帧」（`overlay=enable='eq(n,0)'` 叠进第一个段的编码），不额外插段、不加时长。
+   2026-09-19 用户定案：**高度保持 1276，不改成 1280**（素材分辨率统一，无实际影响），不要再提。
 5. **每条产物必须字节级互不相同。**
    fieldmix 每次编码都**重新随机**色块图（`time_ns` 做种子），外加容器 DateUTC 取每条的处理时刻，
    保证 N 条哈希必不同。不做 CRF 抖动、不写死假值。
@@ -86,7 +84,8 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
 8. **容器混淆只做「改写」，不做二次重编码。**
    一次 x264 重编码（配方逐项对齐样本 SEI，见 `CLONE_X264`）+ 一次纯 Python 容器改写（`_clone_container`）。
    改动滤镜链 / 编码参数后必跑 `python3 video_frame_tool/tests/test_video_frame_tool.py`。
-   默认算法 `fieldmix` 复刻 `11 → 22 → 33` 的隔行流程（逐场量化结论见项目根「复刻22_已验证备份/README.md」）：
+   默认算法 `fieldmix` 复刻 `11 → 22 → 33` 的隔行流程
+   （原理、配方与逐场量化数据见 `video_frame_tool/docs/技术原理.md`，本文件不再重复）：
    - 偶行场 = 一整张**静态强彩色色块图**（每成品重新随机；只出 1 帧再 `loop` 复用，否则闪烁且码率暴涨）；
      奇行场 = 原画面。**第 0 帧整帧保留原画** —— 平台用第一帧取封面，第 0 帧若是色块，成品封面就是彩虹横纹。
    - ⚠️ `blend` 的 `N` **从 1 起算**，判断「第 0 帧」必须写 `if(lt(N,1.5),A,B)`；写成 `lt(N,1)` 永远不生效（踩过）。
@@ -123,7 +122,10 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
 - **命名**：JS 用 `camelCase` 函数 / `SCREAMING_SNAKE_CASE` 常量；Python 用 `snake_case` / `SCREAMING_SNAKE_CASE`，模块内 `_private` 前缀表示内部函数。
 - **不要引入 emoji 到代码与文档**（扩展日志前缀 `[抖晓晓]` 是既有文案，保留）。
 - **注释解释「为什么」，不复述「做了什么」**；涉及性能与时序的数字（阈值、间隔、上限）要在注释里写清来源或实测依据。
-- 改动滤镜链 / 并发策略时，**同步更新**：`video_frame_tool/README.md`、受影响的子模块 docstring、本文件的相关条目。三处不一致即视为未完成。
+- 改动滤镜链 / 并发策略时，**同步更新**：`video_frame_tool/docs/技术原理.md`（原理与配方）、
+  受影响的子模块 docstring、本文件的相关条目。任一处不一致即视为未完成。
+- **技术文档只有两份，不要再新增**：`video_frame_tool/docs/技术原理.md`（原理、配方、实测数据）
+  与 `AGENTS.md`（约束、坑点）。两者分工明确、互不复述；新增说明请并入这两处之一。
 - **单元测试 patch 要打到「调用点所在的子模块」**：子模块之间是 `from .x import name` 复制引用，
   patch 到包根（`video_frame_tool._build_small_copy`）**不会生效**。
   新增跨模块依赖时，顺手在测试里确认 patch 目标仍指在调用点上。
@@ -141,6 +143,6 @@ python3 video_frame_tool/tests/test_video_frame_tool.py
 1. **命名不统一**：`manifest.json` 的 `name` 是「抖抖抖 抖音视频下载器 (批量下载)」，而运行时日志与面板标题用「抖晓晓」。统一命名会改变用户在 Chrome 扩展页看到的名字，属于产品决策，**需先与维护者确认**。
 2. **`manifest.json` 的 `description` 仍是早期情绪化文案**，若要上架 Chrome 商店需重写。
 3. **回归检查尚未接入 CI**：`video_frame_tool/tests/test_video_frame_tool.py` 已覆盖命名、随机抽取、
-   拼接规格、封面替换、复刻22 的滤镜配方与产物特征（容器拒读、哈希唯一、场结构），
-   以及命令行与核心的容器字节级一致性；CI 仍只做语法检查。
+   拼接规格、封面替换、复刻22 的滤镜配方与产物特征（容器拒读、哈希唯一、场结构）；
+   CI（`.github/workflows/ci.yml`）仍只做语法检查。
 4. **仓库尚未声明开源许可证**：在维护者决定之前不要添加 `LICENSE` 文件。

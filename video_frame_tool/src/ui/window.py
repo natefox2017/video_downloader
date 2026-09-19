@@ -311,9 +311,6 @@ class App(tk.Tk):
         self.limit_scale.pack(side="left", padx=(4, 4))
         self.limit_label = ttk.Label(limit_row, text="—", width=18, anchor="w")
         self.limit_label.pack(side="left")
-        ttk.Label(box2, text="每条成品 = 封面 + 前贴×N + 搬运 + 尾贴×N，再按 22 的方式处理",
-                  style="Muted.TLabel").grid(row=2, column=0, columnspan=4,
-                                             sticky="w", pady=(6, 0))
 
         # ---------- 同时处理 + 输出到（靠左）；开始处理（最右） ----------
         bar = ttk.Frame(root)
