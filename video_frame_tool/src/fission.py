@@ -7,15 +7,15 @@
     1. 封面（可选）：从封面目录随机取 1 张图片，**强制拉伸**到成品尺寸后替换拼接片的
        第 0 帧（时长/帧数不变，只是画面被换掉）；
     2. 前贴（可选）：从前贴目录随机抽 N 个视频，拼在搬运前面；
-    3. 搬运：搬运视频目录里的一条（由调用方按顺序取，**不随机**）；
+    3. 搬运：搬运视频目录里的一条（由调用方随机抽取，界面 slider 决定抽几条）；
     4. 尾贴（可选）：从尾贴目录随机抽 N 个视频，拼在搬运后面。
 
 拼好的视频是一条约 720x1276 / 30fps 的标准 MP4，再走 obfuscate 的 fieldmix
 （复刻 22.mp4 的上下场混合 + 容器伪装）输出成品：本地播放器拒读、平台可播。
 
 前贴/尾贴/封面**每条成品独立随机抽取**，加上编码时刻参与容器 DateUTC，
-保证每条产物的文件哈希必不同。搬运按顺序取 —— 处理搬运目录排序后的前 N 个，
-一个搬运出一条成品。
+保证每条产物的文件哈希必不同。搬运由界面**随机抽取** N 个（N 由 slider 决定），
+一个搬运出一条成品；抽完按目录原顺序执行，序号/命名因此稳定可预期。
 
 命名：搬运视频名 + `_` + 两位序号（01~99），便于按来源区分、按序号排序。
 """
@@ -162,7 +162,7 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
                        log=None, tag="", algorithm=None, on_progress=None):
     """生成 1 条成品：封面 + 随机前贴 + 搬运 + 随机尾贴 → 拼接 → 复刻22 混淆。
 
-    main:        这条成品用的搬运视频。调用方决定取哪一条（界面按顺序取搬运目录前 N 个）。
+    main:        这条成品用的搬运视频。调用方决定取哪一条（界面随机抽搬运目录里的 N 个）。
     seq:         成品序号（1 起），决定输出文件名 `<搬运名>_NN.mp4`。
     head_pool/tail_pool: 前贴/尾贴候选池（空 = 不拼）。
     head_count/tail_count: 本条随机抽几个前贴/尾贴（0 = 该部分不生效）。
@@ -181,8 +181,9 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
             raise CancelledError("处理已停止")
 
     def _say(text):
+        # 日志只报「第几条」（用户 2026-09-19：别刷屏，来源/组成不必重复报）
         if log:
-            log(f"{tag} {text}" if tag else text)
+            log(text)
 
     stem = os.path.splitext(os.path.basename(main))[0]
     name = output_name(stem, seq)
@@ -214,17 +215,8 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
         if on_progress:
             on_progress(min(1.0, concat_w + max(0.0, frac) * (1.0 - concat_w)))
 
-    parts = []
-    if cover:
-        parts.append("封面")
-    if heads:
-        parts.append(f"前贴 {len(heads)}")
-    parts.append(f"搬运 {os.path.basename(main)}")
-    if tails:
-        parts.append(f"尾贴 {len(tails)}")
-    _say(f"第 {seq} 条：" + " + ".join(parts) + f" → {name}")
-
     work_dir = tempfile.mkdtemp(prefix=".fs_mid_", dir=out_dir)
+    _say(f"第 {seq} 条：开始处理")
     try:
         _stopped()
         if cover or heads or tails:
@@ -245,6 +237,7 @@ def process_one_output(main, seq, out_dir, ffmpeg, registry, stop_event,
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
+    _say(f"第 {seq} 条：完成")
     return os.path.join(out_dir, name)
 
 

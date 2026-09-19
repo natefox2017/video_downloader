@@ -470,16 +470,13 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
 
     :param duration: 源视频时长（秒），用于折算真实进度；读不到给 0
     :param on_progress: 真实完成度回调（0~1）
-    :param log: 日志回调（可空）
+    :param log / tag: 兼容保留（本条不写日志）。界面日志统一由上层 fission 报「第几条」，
+        重编码、改写容器这些内部步骤不再往日志刷屏（用户 2026-09-19 要求）。
     :param out_name: 输出文件名（不含目录）；None 时用源视频名 + .mp4
     :param algorithm: 混淆算法名（见 ALGORITHMS）；None 用默认算法
     """
     algo = get_algorithm(algorithm)
     _check_stopped({"stop_event": stop_event})
-
-    def say(msg):
-        if log:
-            log(f"{tag} {msg}" if tag else msg)
 
     base = os.path.splitext(os.path.basename(src))[0]
     dst = os.path.join(out_dir, out_name if out_name else base + ".mp4")
@@ -497,8 +494,6 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
             total = probe_frames(src)
             if total > 0:
                 frames = max(1, total - 1)
-        say("正在重编码（%s%s）…" % (algo["label"],
-                                    "，%d 帧" % frames if frames else ""))
         cmd = algo["encode_cmd"](ffmpeg, src, mid, frames=frames)
 
         def report(frac):
@@ -508,7 +503,6 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
         _run(cmd, registry, on_progress=report, expected_dur=float(duration or 0.0))
         _check_stopped({"stop_event": stop_event})
 
-        say("正在改写容器…")
         with open(mid, "rb") as fh:
             out = algo["rewrite"](fh.read())
         with open(dst, "wb") as fh:
@@ -518,10 +512,4 @@ def process_video(src, out_dir, ffmpeg, registry, stop_event,
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    size = 0
-    try:
-        size = os.path.getsize(dst)
-    except OSError:
-        pass
-    say("✓ 完成，输出 %.2f MB" % (size / 1048576.0))
     return dst

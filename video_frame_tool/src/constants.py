@@ -16,7 +16,7 @@ import os
 CRF = 20
 
 # ---- 前贴/尾贴拼接 + 复刻22 混淆（见 fission.py） ----
-# 每条成品随机抽几个前贴 / 几个尾贴；搬运视频按顺序取（不随机），处理前 N 个。
+# 每条成品随机抽几个前贴 / 几个尾贴；搬运视频也从目录里随机抽 N 个（界面 slider 定 N）。
 HD_DEFAULT_COUNT = 1
 HD_MAX_COUNT = 10
 TL_DEFAULT_COUNT = 1

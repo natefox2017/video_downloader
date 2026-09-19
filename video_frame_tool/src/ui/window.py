@@ -6,7 +6,7 @@
 
 界面结构（2026-09-19 按用户要求重做）：
     [拼接素材] 前贴 / 尾贴 / 封面 三个可选来源（前贴、尾贴各自可设随机拼几个）
-    [搬运视频] 搬运视频目录 + 「只处理前 N 个」滑块（N 条搬运 → N 条成品）
+    [搬运视频] 搬运视频目录 + 「随机处理 N 个」滑块（随机抽 N 条搬运 → N 条成品）
     底部      同时处理 / 输出到 / 开始处理
 每条成品 = 封面 + 前贴×N + 搬运 + 尾贴×N → 拼接 → 复刻22 混淆。
 """
@@ -18,6 +18,7 @@ from tkinter import filedialog
 from tkinter import messagebox
 import os
 import queue
+import random
 import subprocess
 import threading
 import time
@@ -40,6 +41,22 @@ from ..settings import load_settings, save_settings
 # ============================================================================
 # 八、图形界面
 # ============================================================================
+
+
+def pick_random(files, limit, rng=random):
+    """从 files 里**随机抽** limit 个（不打乱相对顺序，抽满 limit 才随机）。
+
+    limit >= 总数 时原样返回（等于「全都处理」，不引入任何随机）；
+    limit < 总数 时用 random.sample 无放回随机抽。抽完按目录原顺序排回来，
+    这样序号/输出命名仍然稳定可预期（随机的是「挑中哪些」，不是「执行顺序」）。
+    """
+    total = len(files)
+    limit = max(0, int(limit))
+    if limit <= 0:
+        return []
+    if limit >= total:
+        return list(files)
+    return [files[i] for i in sorted(rng.sample(range(total), limit))]
 
 
 class App(tk.Tk):
@@ -304,7 +321,7 @@ class App(tk.Tk):
                    ).grid(row=0, column=3, padx=(10, 0))
         limit_row = ttk.Frame(box2)
         limit_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Label(limit_row, text="只处理前").pack(side="left")
+        ttk.Label(limit_row, text="随机处理").pack(side="left")
         self.limit_scale = ttk.Scale(limit_row, from_=1, to=1, length=180,
                                      variable=self.limit_var,
                                      command=lambda *_: self._update_limit_label())
@@ -445,13 +462,12 @@ class App(tk.Tk):
             messagebox.showinfo("提示", "搬运视频文件夹里没有找到视频文件")
             return
 
-        # slider 限制：只处理排序后的前 N 个（默认 N = 全部）
+        # slider：从搬运目录里**随机抽** N 个处理（默认 N = 全部 = 全都处理）
         try:
             limit = max(1, int(float(self.limit_var.get())))
         except Exception:
             limit = len(files)
-        if limit < len(files):
-            files = files[:limit]
+        files = pick_random(files, limit)
 
         head_on = self.head_on.get()
         tail_on = self.tail_on.get()
@@ -520,7 +536,7 @@ class App(tk.Tk):
 
         _total_all = self._video_total
         self._log(f"开始处理：{len(files)} 条成品"
-                  + (f"（搬运目录共 {_total_all} 个，按 slider 只处理前 {len(files)} 个）"
+                  + (f"（搬运目录共 {_total_all} 个，随机抽 {len(files)} 个）"
                      if 0 < len(files) < _total_all else "")
                   + f"，同时处理 {workers} 个")
         self._log(f"前贴：{'开（每条随机拼 ' + str(head_count) + ' 个）' if head_on else '关'}")
@@ -695,15 +711,15 @@ class App(tk.Tk):
                     done = payload
         except queue.Empty:
             pass
-        if count is not None:
-            d, t = count
-            self.progress_text.configure(text=f"{d}/{t}")
-            # 有细粒度进度时进度条交给它，否则退回「已完成条数」的粗进度
-            if prog is None:
-                self.progress.configure(mode="determinate", maximum=100,
-                                        value=self._percent(d, t))
+        # 进度区只显示「总进度」百分比，不显示「已完成/总数」条数
         if prog is not None:
             self.progress.configure(mode="determinate", maximum=100, value=prog)
+            self.progress_text.configure(text=f"{prog:.0f}%")
+        elif count is not None:
+            # 还没拿到细粒度进度（细粒度数据来自 ffmpeg 汇报的编码秒数）时，
+            # 用已完成条数折算一个百分比顶上，避免进度区一直停在「准备中…」
+            d, t = count
+            self._draw_progress(self._percent(d, t))
         self._log_batch(logs)
         if done:
             self._finish(done)

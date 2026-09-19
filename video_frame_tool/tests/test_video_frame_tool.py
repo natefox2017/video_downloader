@@ -5,6 +5,7 @@
 跑法：python3 tests/test_video_frame_tool.py
 """
 import os
+import queue
 import subprocess
 import struct
 import sys
@@ -332,7 +333,66 @@ def check_progress_reporting():
         counts = [p for k, p in msgs if k == 'count']
         assert counts[-1] == (4, 4), counts
         assert any(k == 'done' for k, _ in msgs), msgs[-3:]
-    print('进度上报：总进度公式、单条真实进度、界面聚合检查通过')
+
+    # ---- 随机抽搬运：抽满 = 全都处理；不足时无放回随机、按目录原顺序 ----
+    from src.ui.window import pick_random
+    pool = ['v%02d' % i for i in range(20)]
+    assert pick_random(pool, 20) == pool and pick_random(pool, 99) == pool
+    assert pick_random(pool, 0) == [] and pick_random(pool, -3) == []
+    for _ in range(20):
+        got = pick_random(pool, 5)
+        assert len(got) == 5 and len(set(got)) == 5, got
+        assert set(got) <= set(pool), got
+        assert got == sorted(got, key=pool.index), ('抽完要按目录原顺序', got)
+    import random as _random
+    assert (pick_random(pool, 5, _random.Random(7))
+            == pick_random(pool, 5, _random.Random(7))), '同种子必须可复现'
+    assert len({tuple(pick_random(pool, 5)) for _ in range(50)}) > 1, '必须真随机'
+
+    # ---- 进度区只显示总进度百分比，不显示「已完成/总数」----
+    class _Label:
+        def __init__(self):
+            self.text = None
+
+        def configure(self, **kw):
+            self.text = kw.get('text', self.text)
+
+    class _Bar:
+        def __init__(self):
+            self.value = None
+
+        def configure(self, **kw):
+            self.value = kw.get('value', self.value)
+
+    class _Poll(_Stub):
+        """顶替界面：进度区/日志/after 全换成本地假对象，跑真 _poll_queue。"""
+
+        def __init__(self):
+            super().__init__()
+            self.msg_q = queue.Queue()      # 真队列：put / get_nowait 都有
+            self.progress, self.progress_text = _Bar(), _Label()
+            self._log_batch = lambda lines: None
+            self._finish = lambda payload: None
+            self.after = lambda ms, fn: None
+            self._poll_queue = lambda: None
+            self._draw_progress = lambda pct: App._draw_progress(self, pct)
+
+    poll = _Poll()
+    poll.msg_q.put(('count', (3, 10)))
+    App._poll_queue(poll)
+    assert poll.progress_text.text == '30%', poll.progress_text.text
+    assert abs(poll.progress.value - 30.0) < 1e-9, poll.progress.value
+    poll.msg_q.put(('progress', 47.5))
+    App._poll_queue(poll)
+    assert poll.progress_text.text == '48%', poll.progress_text.text
+    assert abs(poll.progress.value - 47.5) < 1e-9, poll.progress.value
+    poll.msg_q.put(('count', (5, 10)))
+    App._poll_queue(poll)
+    assert poll.progress_text.text == '50%', ('只有条数可算时也要报百分比',
+                                              poll.progress_text.text)
+    assert '/' not in (poll.progress_text.text or ''), \
+        ('进度区不允许出现「已完成/总数」', poll.progress_text.text)
+    print('进度上报：总进度公式、单条真实进度、界面聚合（只报百分比）检查通过')
 
 
 if __name__ == '__main__':
