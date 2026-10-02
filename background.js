@@ -72,7 +72,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   const text = count > 0 ? String(count > 99 ? "99+" : count) : "";
   chrome.action.setBadgeText({ text, tabId }).catch(() => {});
   if (text) {
-    chrome.action.setBadgeBackgroundColor({ color: "#6366f1", tabId }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#4f46e5", tabId }).catch(() => {});
   }
 });
 

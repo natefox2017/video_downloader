@@ -310,7 +310,7 @@
           font-weight: 400;
           font-size: 11px;
           color: #fff;
-          background: #7c6cf0;
+          background: #7c3aed;
           border-radius: 4px;
           padding: 1px 6px;
         }
