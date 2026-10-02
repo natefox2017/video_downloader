@@ -38,7 +38,12 @@
   function pickTitle() {
     const og = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
     if (og) return og.trim();
-    return (document.title || "").replace(/_快手.*$/, "").replace(/-快手.*$/, "").trim();
+    // 快手详情页标题节点
+    try {
+      const h1 = document.querySelector("h1");
+      if (h1?.textContent?.trim()) return h1.textContent.trim().slice(0, 80);
+    } catch (error) { /* 忽略 */ }
+    return (document.title || "").replace(/_快手.*$/, "").replace(/-快手.*$/, "").replace(/快手$/, "").trim();
   }
 
   /** 读作者：og 标签 / 页面内常见作者节点，取不到返回空 */
@@ -47,10 +52,39 @@
     if (meta) return meta.trim();
     // 快手详情页作者名节点（class 名可能变，包一层 try，失败就放弃）
     try {
-      const node = document.querySelector('[class*="user-name"], [class*="author-name"]');
-      if (node?.textContent?.trim()) return node.textContent.trim().slice(0, 40);
+      const selectors = [
+        '[class*="user-name"]',
+        '[class*="author-name"]',
+        '[class*="nickname"]',
+        '[data-e2e="video-author-name"]',
+      ];
+      for (const sel of selectors) {
+        const node = document.querySelector(sel);
+        if (node?.textContent?.trim()) return node.textContent.trim().slice(0, 40);
+      }
     } catch (error) {
       /* 忽略 */
+    }
+    return "";
+  }
+
+  /** 读封面：og:image / video poster / 内嵌 JSON */
+  function pickCover() {
+    const og = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
+    if (og) return og;
+    // 正在播放的 video 元素的 poster
+    try {
+      const video = document.querySelector("video[poster]");
+      if (video?.poster) return video.poster;
+    } catch (error) { /* 忽略 */ }
+    // 内嵌 JSON 里的封面字段
+    for (const pattern of [
+      /"coverUrl"\s*:\s*"((?:https?:)?\/\/[^"]+)"/g,
+      /"poster"\s*:\s*"((?:https?:)?\/\/[^"]+)"/g,
+      /"thumbnailUrl"\s*:\s*"((?:https?:)?\/\/[^"]+)"/g,
+    ]) {
+      const urls = X.scanScriptUrls(pattern);
+      if (urls.length) return urls[0];
     }
     return "";
   }
@@ -71,7 +105,7 @@
 
     const title = pickTitle() || "快手视频";
     const author = pickAuthor();
-    const cover = document.querySelector('meta[property="og:image"]')?.getAttribute("content") || "";
+    const cover = pickCover();
 
     return {
       // 去重键用视频地址：信息流切视频时页面 URL 不变，靠地址区分不同视频

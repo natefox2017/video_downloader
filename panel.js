@@ -203,9 +203,16 @@
         item.status === "downloading" ? "is-downloading" : "",
         isDone(item) ? "is-done" : "",
       ].filter(Boolean).join(" ");
-      const cover = item.cover
+      const coverImg = item.cover
         ? `<img class="card__cover" src="${escapeHtml(item.cover)}" alt="" loading="lazy" />`
         : `<span class="card__cover"></span>`;
+      const cover = `
+        <div class="card__cover-wrap" data-stop="1">
+          ${coverImg}
+          <button class="card__play" data-preview="1" title="预览视频">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+        </div>`;
 
       return `
         <li class="${cardClass}" data-url="${escapeHtml(item.shareUrl)}">
@@ -431,6 +438,50 @@
     state.keyword = "";
     render();
     searchEl.focus();
+  });
+
+  /* ---------------- 视频预览 ---------------- */
+
+  const previewEl = document.getElementById("preview");
+  const previewVideo = document.getElementById("preview-video");
+  const previewTitle = document.getElementById("preview-title");
+  const previewClose = document.getElementById("preview-close");
+  const previewBackdrop = document.getElementById("preview-backdrop");
+
+  function openPreview(item) {
+    const url = item.videoUrl || (item.videoUrls && item.videoUrls[0]);
+    if (!url) {
+      toast("该视频暂无可预览的地址");
+      return;
+    }
+    previewTitle.textContent = item.title || "视频预览";
+    previewVideo.src = url;
+    previewEl.classList.add("is-open");
+    previewVideo.play().catch(() => {});
+  }
+
+  function closePreview() {
+    previewVideo.pause();
+    previewVideo.removeAttribute("src");
+    previewVideo.load();
+    previewEl.classList.remove("is-open");
+  }
+
+  previewClose.addEventListener("click", closePreview);
+  previewBackdrop.addEventListener("click", closePreview);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && previewEl.classList.contains("is-open")) closePreview();
+  });
+
+  // 点击封面上的播放按钮 → 预览（不触发勾选）
+  listEl.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-preview]");
+    if (!btn) return;
+    event.stopPropagation();
+    const card = btn.closest(".card");
+    if (!card || !card.dataset.url) return;
+    const item = state.items.find((row) => row.shareUrl === card.dataset.url);
+    if (item) openPreview(item);
   });
 
   /* ---------------- 与 content.js 通信 ---------------- */
