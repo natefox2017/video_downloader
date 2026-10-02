@@ -36,6 +36,11 @@ const PLATFORMS = [
   { id: "xigua",       name: "西瓜视频", hosts: ["ixigua.com"],                     extractor: null }, // 暂无专用抓取，走通用嗅探
   { id: "youtube",     name: "YouTube",  hosts: ["youtube.com", "youtu.be"],        extractor: "extractors/youtube.js" },
   { id: "tiktok",      name: "TikTok",   hosts: ["tiktok.com"],                     extractor: "extractors/tiktok.js" },
+  { id: "vimeo",       name: "Vimeo",    hosts: ["vimeo.com", "player.vimeo.com"],  extractor: "extractors/vimeo.js" },
+  { id: "twitch",      name: "Twitch",   hosts: ["twitch.tv"],                      extractor: "extractors/twitch.js" },
+  { id: "instagram",   name: "Instagram", hosts: ["instagram.com"],                 extractor: "extractors/instagram.js" },
+  { id: "facebook",    name: "Facebook", hosts: ["facebook.com", "fb.watch"],      extractor: "extractors/facebook.js" },
+  { id: "twitter",     name: "X",        hosts: ["twitter.com", "x.com"],           extractor: "extractors/twitter.js" },
 ];
 
 /** 未命中平台时的兜底平台 */

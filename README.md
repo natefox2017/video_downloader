@@ -75,6 +75,13 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 | 微博 Weibo | `extractors/weibo.js` | video elements + URL field scan |
 | 小红书 Xiaohongshu | `extractors/xiaohongshu.js` | `__INITIAL_STATE__` |
 | 西瓜视频 Xigua | — | Generic sniffing |
+| YouTube | `extractors/youtube.js` | `ytInitialPlayerResponse`; progressive URLs preferred |
+| TikTok | `extractors/tiktok.js` | `__UNIVERSAL_DATA_FOR_REHYDRATION__` |
+| Vimeo | `extractors/vimeo.js` | player config; progressive MP4 preferred |
+| Twitch | `extractors/twitch.js` | GQL playback token → usher m3u8 (live/VOD) |
+| Instagram | `extractors/instagram.js` | `video_url` in page JSON |
+| Facebook | `extractors/facebook.js` | `playable_url` / HD variant in page JSON |
+| X (Twitter) | `extractors/twitter.js` | `video_info.variants`; highest bitrate MP4 |
 | Other sites | — | Generic sniffing (video elements + network resources) |
 
 ## Project structure
