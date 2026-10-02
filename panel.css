@@ -105,9 +105,10 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 6px 12px 8px;
   background: var(--bg);
+  min-width: 0;
 }
 
 .check {
@@ -117,6 +118,8 @@ body {
   cursor: pointer;
   user-select: none;
   font-weight: 500;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .check input { display: none; }
@@ -158,16 +161,27 @@ body {
   cursor: pointer;
   transition: all .15s ease;
   box-shadow: var(--shadow-card);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .chip:hover { color: var(--text); border-color: #d3d7de; }
 
-.chip--sort { margin-left: auto; }
+.chip--sort {
+  margin-left: 0;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  font-size: 13px;
+}
 
 .toolbar__count {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-3);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------------- 平台筛选 ---------------- */
@@ -253,6 +267,9 @@ body {
   cursor: pointer;
   transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
   position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .card:hover {
