@@ -249,6 +249,14 @@
             </div>
           </div>
           <div class="card__actions" data-stop="1">
+            ${item.platformId === "douyin" && item.originVid ? `
+            <button class="icon-btn" data-origin="1" data-vid="${escapeHtml(item.originVid)}" title="溯源：复制原画直链">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="8" cy="8" r="6" />
+                <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
+                <path d="M8 2v2M8 12v2M2 8h2M12 8h2" stroke-linecap="round" />
+              </svg>
+            </button>` : ""}
             <button class="icon-btn" data-copy="1" title="复制视频链接">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
                 <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
@@ -440,6 +448,63 @@
       } catch (fallbackError) {
         toast("复制失败，请手动复制");
       }
+    }
+  });
+
+  // 溯源：解析抖音原画直链并复制
+  listEl.addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-origin]");
+    if (!btn) return;
+    const vid = btn.dataset.vid;
+    if (!vid) {
+      toast("未找到原画 ID");
+      return;
+    }
+    btn.disabled = true;
+    toast("正在解析原画…");
+    try {
+      // 原画接口：302 跳转到 CDN 直链（参考 jiuhunwl/short_videos）
+      const apiUrl = `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(vid)}&ratio=default&line=0`;
+      const response = await fetch(apiUrl, { redirect: "manual" });
+      let originUrl = "";
+      if (response.type === "opaqueredirect" || response.status === 302 || response.status === 301) {
+        originUrl = response.headers.get("Location") || "";
+      } else {
+        // 部分环境自动跟随跳转，直接取最终地址
+        originUrl = response.url || "";
+      }
+      // 兜底：手动跟随一次
+      if (!originUrl || originUrl === apiUrl) {
+        const follow = await fetch(apiUrl, { redirect: "follow" });
+        originUrl = follow.url || "";
+      }
+      if (!originUrl || originUrl === apiUrl) throw new Error("未解析到原画地址");
+
+      try {
+        await navigator.clipboard.writeText(originUrl);
+      } catch (clipError) {
+        const ta = document.createElement("textarea");
+        ta.value = originUrl;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      btn.classList.add("is-ok");
+      toast("原画直链已复制");
+      setTimeout(() => btn.classList.remove("is-ok"), 1200);
+    } catch (error) {
+      toast("原画解析失败，已降级复制当前链接");
+      try {
+        const card = btn.closest(".card");
+        const item = card && state.items.find((row) => row.shareUrl === card.dataset.url);
+        const fallback = item?.videoUrl || item?.shareUrl || "";
+        if (fallback) await navigator.clipboard.writeText(fallback);
+      } catch (fallbackError) { /* 忽略 */ }
+    } finally {
+      btn.disabled = false;
     }
   });
 

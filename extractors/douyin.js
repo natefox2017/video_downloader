@@ -38,6 +38,24 @@
     return X.absolutize(music.playUrl?.uri);
   }
 
+  /** 提取视频 vid（用于原画接口） */
+  function pickVid(video) {
+    // playAddr[0].uri 通常是 vid
+    if (Array.isArray(video?.playAddr)) {
+      for (const item of video.playAddr) {
+        if (item?.uri) return String(item.uri);
+      }
+    }
+    // 从 playApi URL 里提取 video_id 参数
+    const playApi = String(video?.playApi || "");
+    const match = playApi.match(/[?&]video_id=([^&]+)/);
+    if (match) return decodeURIComponent(match[1]);
+    // 从 CDN URL 路径里提取（/video/tos/.../vid~... 形式）
+    const urlMatch = playApi.match(/\/([a-f0-9]{32})/i);
+    if (urlMatch) return urlMatch[1];
+    return "";
+  }
+
   /** 估算文件大小（抖音不同版本字段名不一致） */
   function pickFileSize(video) {
     const first = Array.isArray(video?.bitRateList) ? video.bitRateList[0] : null;
@@ -90,6 +108,7 @@
       fileName: buildFileName(awemeInfo),
       videoUrls,
       audioUrl: pickAudioUrl(awemeInfo.music),
+      originVid: pickVid(video),
       imageUrls: images
         .map((item) => item?.urlList?.[0] || item?.urlList?.[item?.urlList?.length - 1] || "")
         .filter(Boolean),
