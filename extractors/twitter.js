@@ -22,24 +22,22 @@
       .replace(/&amp;/g, "&");
   }
 
-  /** 从页面源码提取 video_info.variants 里的 MP4 地址（按码率降序） */
+  /** 从页面源码提取 video_info.variants 里的 MP4 地址（按码率降序，同步） */
   function extractVideoUrls() {
     const candidates = []; // {url, bitrate}
     const seen = new Set();
-
     const scripts = document.querySelectorAll("script");
+
     for (const script of scripts) {
       const text = script.textContent || "";
       if (!text || !text.includes("video_info")) continue;
       const slice = text.length > 2 * 1024 * 1024 ? text.slice(0, 2 * 1024 * 1024) : text;
 
-      // 找 "variants":[{...}] 块
       const variantsPattern = /"variants"\s*:\s*\[([^\]]+)\]/g;
       let vm;
       variantsPattern.lastIndex = 0;
       while ((vm = variantsPattern.exec(slice)) !== null) {
         const block = vm[1];
-        // 每个 variant：{"bitrate":2176000,"content_type":"video/mp4","url":"https://..."}
         const itemPattern = /\{[^{}]*"content_type"\s*:\s*"video\/mp4"[^{}]*\}/g;
         let im;
         itemPattern.lastIndex = 0;
@@ -74,33 +72,20 @@
     return { title, author, cover };
   }
 
-  /** 推文 ID 用于缓存键 */
-  function getTweetId() {
-    const match = location.pathname.match(/\/status\/(\d+)/);
-    return match ? match[1] : location.href;
-  }
-
-  let lastKey = "";
-  let cachedMedia = null;
-
-  function getMedia() {
+  function detect() {
     // 只在推文详情页抓取
     if (!/\/status\/\d+/.test(location.pathname)) return null;
-
-    const key = getTweetId();
-    if (key === lastKey && cachedMedia) return cachedMedia;
 
     const urls = extractVideoUrls();
     if (!urls.length) return null;
 
+    const key = location.pathname.match(/\/status\/(\d+)/)?.[1] || "tweet";
     const meta = getMeta();
     const author = meta.author || "未知作者";
     const title = meta.title || `twitter_${key}`;
 
-    const media = {
+    return {
       shareUrl: location.href,
-      platformId: "twitter",
-      platform: "X",
       title: X.safeText(title).trim().slice(0, 80),
       desc: "",
       author,
@@ -113,12 +98,12 @@
       videoUrls: urls,
       audioUrl: "",
       imageUrls: [],
-      source: "页面解析",
     };
-    lastKey = key;
-    cachedMedia = media;
-    return media;
   }
 
-  X.create("twitter", { getMedia });
+  X.create("twitter", {
+    platformName: "X",
+    pollInterval: 2000,
+    detect,
+  });
 })();

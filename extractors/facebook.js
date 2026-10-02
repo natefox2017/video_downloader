@@ -22,13 +22,7 @@
       .replace(/&amp;/g, "&");
   }
 
-  /** 清理 fbcdn URL 的多余转义 */
-  function cleanFbUrl(url) {
-    const text = unescapeUrl(url);
-    return text.startsWith("http") ? text : "";
-  }
-
-  /** 从页面源码提取高清/标清视频地址 */
+  /** 从页面源码提取高清/标清视频地址（同步） */
   function extractVideoUrls() {
     let hd = "";
     let sd = "";
@@ -48,8 +42,8 @@
         pattern.lastIndex = 0;
         let match;
         while ((match = pattern.exec(slice)) !== null) {
-          const url = cleanFbUrl(match[1]);
-          if (!url) continue;
+          const url = unescapeUrl(match[1]);
+          if (!url.startsWith("http")) continue;
           if (kind === "hd" && !hd) hd = url;
           if (kind === "sd" && !sd) sd = url;
         }
@@ -75,37 +69,24 @@
     return { title, cover };
   }
 
-  /** 视频 ID（/videos/xxx、/watch/?v=xxx）用于缓存键 */
-  function getVideoId() {
-    let match = location.pathname.match(/\/videos\/(\d+)/);
-    if (match) return match[1];
-    match = location.search.match(/[?&]v=(\d+)/);
-    if (match) return match[1];
-    return location.href;
-  }
-
-  let lastKey = "";
-  let cachedMedia = null;
-
-  function getMedia() {
+  function detect() {
     // 只在视频相关页面抓取
     if (!(/\/(videos|watch|reel)\//.test(location.pathname) || /[?&]v=\d+/.test(location.search))) {
       return null;
     }
 
-    const key = getVideoId();
-    if (key === lastKey && cachedMedia) return cachedMedia;
-
     const urls = extractVideoUrls();
     if (!urls.length) return null;
 
+    const key =
+      location.pathname.match(/\/videos\/(\d+)/)?.[1] ||
+      location.search.match(/[?&]v=(\d+)/)?.[1] ||
+      "video";
     const meta = getMeta();
     const title = meta.title || `facebook_${key}`;
 
-    const media = {
+    return {
       shareUrl: location.href,
-      platformId: "facebook",
-      platform: "Facebook",
       title: X.safeText(title).trim().slice(0, 80),
       desc: "",
       author: "未知作者",
@@ -118,12 +99,12 @@
       videoUrls: urls,
       audioUrl: "",
       imageUrls: [],
-      source: "页面解析",
     };
-    lastKey = key;
-    cachedMedia = media;
-    return media;
   }
 
-  X.create("facebook", { getMedia });
+  X.create("facebook", {
+    platformName: "Facebook",
+    pollInterval: 2000,
+    detect,
+  });
 })();
