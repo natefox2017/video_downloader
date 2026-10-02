@@ -71,6 +71,29 @@
       ],
       "run_at": "document_end",
       "world": "MAIN"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/youtube.js"
+      ],
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://youtu.be/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/tiktok.js"
+      ],
+      "matches": [
+        "*://*.tiktok.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
     }
   ],
   "description": "自动识别并下载网页中的视频：支持抖音、快手、哔哩哔哩、微博、小红书、西瓜视频等主流平台，未覆盖的网站自动嗅探直链与 m3u8。批量下载、视频预览、断点嗅探，开源免费。",
