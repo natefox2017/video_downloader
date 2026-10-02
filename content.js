@@ -380,6 +380,7 @@
     const body = shadow.querySelector(".vd-panel__body");
     panelFrame = document.createElement("iframe");
     panelFrame.className = "vd-panel__frame";
+    panelFrame.setAttribute("allowtransparency", "true");
     panelFrame.src = chrome.runtime.getURL("panel.html");
     panelFrame.addEventListener("load", () => {
       const loading = shadow.querySelector("#vd-loading");
