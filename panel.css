@@ -407,10 +407,46 @@ body {
 .card__state.is-error { color: var(--danger); }
 .card__state.is-downloading { color: var(--primary); }
 
-/* 单行快捷下载 */
-.card__go {
+/* 卡片右侧操作区：复制链接 + 快捷下载 */
+.card__actions {
   flex: 0 0 auto;
   align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f3f6;
+  color: var(--text-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s ease;
+  opacity: 0;
+}
+
+.card:hover .icon-btn { opacity: 1; }
+
+.icon-btn:hover {
+  background: var(--text);
+  color: #fff;
+  transform: scale(1.08);
+}
+
+.icon-btn.is-ok {
+  background: var(--success);
+  color: #fff;
+  opacity: 1;
+}
+
+/* 单行快捷下载 */
+.card__go {
   width: 30px;
   height: 30px;
   border: 0;
@@ -433,8 +469,8 @@ body {
   transform: scale(1.08);
 }
 
-.card.is-done .card__go,
-.card.is-downloading .card__go { display: none; }
+.card.is-done .card__actions,
+.card.is-downloading .card__actions { display: none; }
 
 /* ---------------- 空状态 ---------------- */
 

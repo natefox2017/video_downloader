@@ -165,6 +165,18 @@
     filtersEl.innerHTML = html;
   }
 
+  /** 时长格式化：秒 → mm:ss / hh:mm:ss */
+  function formatDuration(seconds) {
+    if (!seconds || seconds <= 0) return "";
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+    const ss = String(sec).padStart(2, "0");
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
   /* ---------------- 渲染 ---------------- */
 
   function stateText(item) {
@@ -217,9 +229,8 @@
           <div class="card__main">
             <div class="card__title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
             <div class="card__meta">
-              <span class="${platClass(item)}">${escapeHtml(item.platform || "")}</span>
+              ${item.duration > 0 ? `<span class="tag tag--time">⏱ ${escapeHtml(formatDuration(item.duration))}</span>` : ""}
               <span class="tag">${escapeHtml(item.type || "视频")}</span>
-              <span class="tag">${escapeHtml(item.source || "")}</span>
               ${item.author ? `<span class="card__author">${escapeHtml(item.author)}</span>` : ""}
             </div>
             <div class="card__foot">
@@ -228,11 +239,19 @@
               <span class="${stateClass(item)}">${escapeHtml(stateText(item))}</span>
             </div>
           </div>
-          <button class="card__go" data-stop="1" title="直接下载这一条">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M8 2v8m0 0 3.5-3.5M8 10 4.5 6.5M2.5 13.5h11" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
+          <div class="card__actions" data-stop="1">
+            <button class="icon-btn" data-copy="1" title="复制视频链接">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3.5v5A1.5 1.5 0 0 0 4 10h1.5" />
+              </svg>
+            </button>
+            <button class="card__go" data-download-one="1" title="直接下载这一条">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M8 2v8m0 0 3.5-3.5M8 10 4.5 6.5M2.5 13.5h11" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </div>
         </li>
       `;
     }).join("");
@@ -355,13 +374,47 @@
 
   // 单行快捷下载
   listEl.addEventListener("click", (event) => {
-    const go = event.target.closest(".card__go");
+    const go = event.target.closest("[data-download-one]");
     if (!go) return;
     const card = go.closest(".card");
     if (!card || !card.dataset.url) return;
     const item = state.items.find((row) => row.shareUrl === card.dataset.url);
     if (!item || isDone(item)) return;
     post({ type: "start_download", shareUrls: [item.shareUrl] });
+  });
+
+  // 复制视频链接
+  listEl.addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-copy]");
+    if (!btn) return;
+    const card = btn.closest(".card");
+    if (!card || !card.dataset.url) return;
+    const item = state.items.find((row) => row.shareUrl === card.dataset.url);
+    if (!item) return;
+    const url = item.videoUrl || (item.videoUrls && item.videoUrls[0]) || item.shareUrl;
+    try {
+      await navigator.clipboard.writeText(url);
+      btn.classList.add("is-ok");
+      toast("视频链接已复制");
+      setTimeout(() => btn.classList.remove("is-ok"), 1200);
+    } catch (error) {
+      // clipboard API 不可用时降级：用临时 textarea
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        btn.classList.add("is-ok");
+        toast("视频链接已复制");
+        setTimeout(() => btn.classList.remove("is-ok"), 1200);
+      } catch (fallbackError) {
+        toast("复制失败，请手动复制");
+      }
+    }
   });
 
   selectAllEl.addEventListener("change", () => {
