@@ -61,3 +61,29 @@ chrome.action.onClicked.addListener(async () => {
   }
   await showPanelOnTab(tabId);
 });
+
+/* ---------------- 扩展图标徽标：显示当前标签页检测到的视频数量 ---------------- */
+
+/** content.js 上报视频数量时，在对应标签页的图标上显示徽标 */
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (!message || message.type !== "update_badge" || sender.tab?.id == null) return;
+  const count = message.count || 0;
+  const tabId = sender.tab.id;
+  const text = count > 0 ? String(count > 99 ? "99+" : count) : "";
+  chrome.action.setBadgeText({ text, tabId }).catch(() => {});
+  if (text) {
+    chrome.action.setBadgeBackgroundColor({ color: "#6366f1", tabId }).catch(() => {});
+  }
+});
+
+/** 标签页关闭时清除徽标，避免残留 */
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
+});
+
+/** 标签页开始导航（刷新/跳转）时清零，等 content.js 重新上报 */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
+  }
+});

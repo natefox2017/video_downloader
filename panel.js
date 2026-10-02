@@ -18,6 +18,10 @@
     downloading: false,
     batch: { completed: 0, total: 0, tooltip: "" },
     keyword: "",
+    /** 平台筛选：platformId，"" = 全部 */
+    platFilter: "",
+    /** 排序：time（最新优先）/ size（体积最大优先） */
+    sort: "time",
   };
 
   /* ---------------- DOM ---------------- */
@@ -27,6 +31,8 @@
   const countEl = document.getElementById("count");
   const selectAllEl = document.getElementById("select-all");
   const invertEl = document.getElementById("invert");
+  const sortEl = document.getElementById("sort");
+  const filtersEl = document.getElementById("filters");
   const downloadEl = document.getElementById("download");
   const downloadLabel = document.getElementById("download-label");
   const toastEl = document.getElementById("toast");
@@ -87,14 +93,76 @@
     return state.items.filter((item) => !isDone(item));
   }
 
-  /** 搜索过滤后的可见条目 */
+  /** 平台品牌色（用于筛选 chips 的圆点） */
+  const PLAT_COLOR = {
+    douyin: "#161823",
+    kuaishou: "#ff4906",
+    bilibili: "#00a1d6",
+    weibo: "#e6162d",
+    xiaohongshu: "#ff2442",
+    xigua: "#ff6a00",
+    generic: "#6366f1",
+  };
+
+  function platColor(item) {
+    return PLAT_COLOR[item.platformId] || PLAT_COLOR.generic;
+  }
+
+  /** 搜索 + 平台筛选 + 排序后的可见条目 */
   function visibleItems() {
+    let items = state.items;
+
+    if (state.platFilter) {
+      items = items.filter((item) => item.platformId === state.platFilter);
+    }
+
     const kw = state.keyword.trim().toLowerCase();
-    if (!kw) return state.items;
-    return state.items.filter((item) =>
-      (item.title || "").toLowerCase().includes(kw) ||
-      (item.author || "").toLowerCase().includes(kw)
-    );
+    if (kw) {
+      items = items.filter((item) =>
+        (item.title || "").toLowerCase().includes(kw) ||
+        (item.author || "").toLowerCase().includes(kw)
+      );
+    }
+
+    items = items.slice();
+    if (state.sort === "size") {
+      items.sort((a, b) => (b.size || 0) - (a.size || 0));
+    }
+    // sort === "time" 时保持原顺序（最新在前）
+
+    return items;
+  }
+
+  /** 渲染平台筛选 chips（只显示有视频的平台） */
+  function renderFilters() {
+    const counts = {};
+    state.items.forEach((item) => {
+      const pid = item.platformId || "generic";
+      counts[pid] = counts[pid] || { name: item.platform || "通用", n: 0 };
+      counts[pid].n += 1;
+    });
+
+    const pids = Object.keys(counts);
+    if (pids.length <= 1) {
+      filtersEl.innerHTML = "";
+      if (state.platFilter) state.platFilter = "";
+      return;
+    }
+
+    // 当前筛选的平台如果没视频了，回到全部
+    if (state.platFilter && !counts[state.platFilter]) state.platFilter = "";
+
+    const total = state.items.length;
+    let html = `<button class="fchip ${state.platFilter === "" ? "is-active" : ""}" data-plat="">全部 <span class="fchip__n">${total}</span></button>`;
+    // 按数量降序排列
+    pids.sort((a, b) => counts[b].n - counts[a].n);
+    pids.forEach((pid) => {
+      const c = counts[pid];
+      const color = PLAT_COLOR[pid] || PLAT_COLOR.generic;
+      html += `<button class="fchip ${state.platFilter === pid ? "is-active" : ""}" data-plat="${escapeHtml(pid)}">` +
+        `<span class="fchip__dot" style="background:${color}"></span>${escapeHtml(c.name)} <span class="fchip__n">${c.n}</span></button>`;
+    });
+    filtersEl.innerHTML = html;
   }
 
   /* ---------------- 渲染 ---------------- */
@@ -114,8 +182,9 @@
   }
 
   function render() {
+    renderFilters();
     const items = visibleItems();
-    const filtering = state.keyword.trim().length > 0;
+    const filtering = state.keyword.trim().length > 0 || state.platFilter !== "";
 
     emptyEl.classList.toggle("hidden", items.length > 0);
     if (filtering && items.length === 0) {
@@ -206,9 +275,14 @@
       countEl.title = state.batch.tooltip || "";
     } else {
       const kw = state.keyword.trim();
-      countEl.textContent = kw
-        ? `共 ${total} 条 · 匹配 ${visibleItems().length} 条`
-        : `共 ${total} 条 · 已选 ${selectedCount}`;
+      const matched = visibleItems().length;
+      const totalSize = state.items.reduce((sum, item) => sum + (item.size || 0), 0);
+      const sizeText = totalSize > 0 ? ` · ${formatSize(totalSize)}` : "";
+      if (kw || state.platFilter) {
+        countEl.textContent = `共 ${total} 条 · 匹配 ${matched} 条${sizeText}`;
+      } else {
+        countEl.textContent = `共 ${total} 条 · 已选 ${selectedCount}${sizeText}`;
+      }
       countEl.title = doneCount ? `共 ${total} 条，其中已完成 ${doneCount} 条` : `共 ${total} 条`;
     }
 
@@ -304,6 +378,22 @@
       if (state.selected.has(item.shareUrl)) state.selected.delete(item.shareUrl);
       else state.selected.add(item.shareUrl);
     });
+    render();
+  });
+
+  // 平台筛选
+  filtersEl.addEventListener("click", (event) => {
+    const chip = event.target.closest(".fchip");
+    if (!chip) return;
+    state.platFilter = chip.dataset.plat || "";
+    render();
+  });
+
+  // 排序切换：最新优先 ↔ 体积最大优先
+  const SORT_LABEL = { time: "🕐 最新", size: "💾 最大" };
+  sortEl.addEventListener("click", () => {
+    state.sort = state.sort === "time" ? "size" : "time";
+    sortEl.textContent = SORT_LABEL[state.sort];
     render();
   });
 

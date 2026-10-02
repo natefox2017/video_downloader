@@ -488,6 +488,12 @@
 
   function pushMediaList() {
     sendToPanel({ type: "media_list", items: buildPanelItems() });
+    // 同步更新扩展图标徽标（显示检测到的视频数量）
+    try {
+      chrome.runtime.sendMessage({ type: "update_badge", count: mediaList.length });
+    } catch (error) {
+      /* 后台未就绪时忽略 */
+    }
   }
 
   window.addEventListener("message", (event) => {
