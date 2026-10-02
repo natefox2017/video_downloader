@@ -620,31 +620,42 @@
   }
 
   /** 带进度回调的下载（fetch → Blob）；进度按 2% 步进回调 */
-  async function fetchWithProgress(url, onProgress) {
-    const response = await fetch(url, { credentials: "omit" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  async function fetchWithProgress(url, onProgress, timeoutMs = 120000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { credentials: "omit", signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    const total = Number(response.headers.get("content-length")) || 0;
-    if (!response.body || !onProgress) {
-      return await response.blob();
-    }
-
-    const reader = response.body.getReader();
-    const chunks = [];
-    let loaded = 0;
-    let lastPercent = -1;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      loaded += value.length;
-      const percent = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 95;
-      if (percent - lastPercent >= 2 || percent >= 99) {
-        lastPercent = percent;
-        onProgress(percent);
+      const total = Number(response.headers.get("content-length")) || 0;
+      if (!response.body || !onProgress) {
+        const blob = await response.blob();
+        clearTimeout(timer);
+        return blob;
       }
+
+      const reader = response.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      let lastPercent = -1;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        const percent = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 95;
+        if (percent - lastPercent >= 2 || percent >= 99) {
+          lastPercent = percent;
+          onProgress(percent);
+        }
+      }
+      clearTimeout(timer);
+      return new Blob(chunks, { type: response.headers.get("content-type") || "application/octet-stream" });
+    } catch (error) {
+      clearTimeout(timer);
+      if (error.name === "AbortError") throw new Error("下载超时（120秒无响应）");
+      throw error;
     }
-    return new Blob(chunks, { type: response.headers.get("content-type") || "application/octet-stream" });
   }
 
   /** 触发浏览器下载（默认保存到浏览器下载目录） */
