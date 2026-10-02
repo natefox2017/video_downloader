@@ -4,19 +4,20 @@
  */
 
 :root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
+  --bg: rgba(246, 247, 249, 0.55);
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #ffffff;
   --text: #17181c;
   --text-2: #6b7280;
   --text-3: #9ca3af;
-  --border: #e8eaee;
+  --border: rgba(0, 0, 0, 0.07);
   --primary: #6366f1;
   --primary-hover: #4f46e5;
-  --primary-soft: #eef0fe;
+  --primary-soft: rgba(99, 102, 241, 0.12);
   --danger: #ef4444;
   --success: #10b981;
   --radius: 12px;
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, .05);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, .06);
   --shadow-pop: 0 8px 24px rgba(16, 24, 40, .12);
 }
 
@@ -26,7 +27,7 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg);
+  background: transparent;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;
@@ -36,6 +37,9 @@ html, body {
 body {
   display: flex;
   flex-direction: column;
+  background: var(--bg);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
 }
 
 /* ---------------- 搜索栏 ---------------- */
