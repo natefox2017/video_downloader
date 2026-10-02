@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Download Helper — 视频下载助手</title>
+<meta name="description" content="A Chrome extension that detects and downloads videos from YouTube, TikTok, Douyin, Bilibili and more.">
+<link rel="icon" type="image/png" href="../images/32.png">
+<style>
+  :root {
+    --glass-bg: rgba(255, 255, 255, 0.55);
+    --glass-border: rgba(255, 255, 255, 0.7);
+    --glass-shadow: 0 8px 32px rgba(31, 38, 135, 0.12);
+    --text: #1a1a2e;
+    --text-2: #5a5a72;
+    --primary: #4f46e5;
+    --primary-2: #7c3aed;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 25%, #f093fb 50%, #f5576c 75%, #667eea 100%);
+    background-size: 400% 400%;
+    animation: bgShift 20s ease infinite;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  @keyframes bgShift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+  /* 浮动装饰球 */
+  .orb { position: fixed; border-radius: 50%; filter: blur(60px); opacity: .5; pointer-events: none; z-index: 0; }
+  .orb-1 { width: 400px; height: 400px; background: #a78bfa; top: -100px; left: -100px; animation: float 12s ease-in-out infinite; }
+  .orb-2 { width: 300px; height: 300px; background: #f9a8d4; bottom: 10%; right: -80px; animation: float 15s ease-in-out infinite reverse; }
+  .orb-3 { width: 250px; height: 250px; background: #93c5fd; top: 40%; left: 60%; animation: float 18s ease-in-out infinite; }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(40px, -40px) scale(1.1); }
+  }
+
+  .glass {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    border-radius: 24px;
+    box-shadow: var(--glass-shadow);
+  }
+
+  /* 导航 */
+  nav {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 100; display: flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 999px;
+    background: rgba(255,255,255,.6);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+  }
+  nav .logo { width: 28px; height: 28px; border-radius: 8px; }
+  nav .name { font-weight: 700; font-size: 15px; }
+  nav .spacer { flex: 1; min-width: 20px; }
+  nav a.nav-link { color: var(--text-2); text-decoration: none; font-size: 14px; padding: 6px 12px; border-radius: 999px; transition: all .2s; white-space: nowrap; }
+  nav a.nav-link:hover { background: rgba(0,0,0,.05); color: var(--text); }
+  .lang-switch { display: flex; background: rgba(0,0,0,.06); border-radius: 999px; padding: 3px; }
+  .lang-switch button {
+    border: 0; background: transparent; padding: 6px 14px; border-radius: 999px;
+    font-size: 13px; cursor: pointer; color: var(--text-2); transition: all .2s;
+    font-family: inherit;
+  }
+  .lang-switch button.active { background: #fff; color: var(--text); box-shadow: 0 2px 8px rgba(0,0,0,.1); font-weight: 600; }
+
+  main { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 120px 24px 60px; }
+
+  /* Hero */
+  .hero { text-align: center; padding: 70px 40px; margin-bottom: 32px; }
+  .hero-icon { width: 96px; height: 96px; border-radius: 24px; box-shadow: 0 12px 40px rgba(79,70,229,.3); margin-bottom: 24px; }
+  .hero h1 { font-size: clamp(32px, 5vw, 56px); font-weight: 800; letter-spacing: -1px; margin-bottom: 16px;
+    background: linear-gradient(135deg, #1a1a2e, #4f46e5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero p.sub { font-size: 18px; color: var(--text-2); max-width: 640px; margin: 0 auto 32px; line-height: 1.7; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 14px 32px; border-radius: 999px;
+    font-size: 16px; font-weight: 600; text-decoration: none; transition: all .25s; border: 0; cursor: pointer;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff;
+    box-shadow: 0 8px 24px rgba(79,70,229,.4);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(79,70,229,.5); }
+  .btn-ghost { background: rgba(255,255,255,.6); color: var(--text); border: 1px solid var(--glass-border); }
+  .btn-ghost:hover { background: rgba(255,255,255,.85); transform: translateY(-2px); }
+  .badges { display: flex; gap: 8px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
+  .badge {
+    padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    background: rgba(255,255,255,.5); border: 1px solid var(--glass-border); color: var(--text-2);
+  }
+
+  /* Section */
+  section { margin-bottom: 32px; }
+  .section-card { padding: 48px 40px; }
+  .section-card h2 { font-size: 28px; font-weight: 800; margin-bottom: 8px; letter-spacing: -.5px; }
+  .section-card p.lead { color: var(--text-2); font-size: 16px; margin-bottom: 32px; line-height: 1.7; }
+
+  /* Features grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .feature {
+    padding: 28px 24px; border-radius: 20px; background: rgba(255,255,255,.45);
+    border: 1px solid var(--glass-border); transition: all .25s;
+  }
+  .feature:hover { transform: translateY(-4px); background: rgba(255,255,255,.7); box-shadow: var(--glass-shadow); }
+  .feature .icon { font-size: 32px; margin-bottom: 12px; }
+  .feature h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+  .feature p { font-size: 14px; color: var(--text-2); line-height: 1.7; }
+
+  /* Platforms */
+  .platforms { display: flex; flex-wrap: wrap; gap: 10px; }
+  .platform {
+    display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 999px;
+    background: rgba(255,255,255,.5); border: 1px solid var(--glass-border);
+    font-size: 14px; font-weight: 600;
+  }
+  .platform .dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* Steps */
+  .steps { display: flex; flex-direction: column; gap: 12px; counter-reset: step; }
+  .step {
+    display: flex; gap: 16px; align-items: flex-start; padding: 20px 24px;
+    background: rgba(255,255,255,.45); border: 1px solid var(--glass-border); border-radius: 16px;
+  }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;
+  }
+  .step p { font-size: 15px; line-height: 1.7; padding-top: 6px; }
+  .step code { background: rgba(0,0,0,.07); padding: 2px 8px; border-radius: 6px; font-size: 13px; }
+
+  footer { text-align: center; padding: 32px; color: rgba(255,255,255,.85); font-size: 14px; position: relative; z-index: 1; }
+  footer a { color: #fff; font-weight: 600; }
+
+  @media (max-width: 640px) {
+    nav { width: calc(100% - 32px); justify-content: space-between; }
+    nav a.nav-link { display: none; }
+    .hero { padding: 48px 24px; }
+    .section-card { padding: 32px 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<nav>
+  <img class="logo" src="../images/48.png" alt="logo">
+  <span class="name" data-i18n="navName">Video Download Helper</span>
+  <span class="spacer"></span>
+  <a class="nav-link" href="#features" data-i18n="navFeatures">Features</a>
+  <a class="nav-link" href="#platforms" data-i18n="navPlatforms">Platforms</a>
+  <a class="nav-link" href="#install" data-i18n="navInstall">Install</a>
+  <div class="lang-switch">
+    <button id="lang-en">EN</button>
+    <button id="lang-zh">中文</button>
+  </div>
+</nav>
+
+<main>
+  <div class="hero glass">
+    <img class="hero-icon" src="../images/128.png" alt="icon">
+    <h1 data-i18n="heroTitle">Video Download Helper</h1>
+    <p class="sub" data-i18n="heroSub">Detect and download videos from YouTube, TikTok, Douyin, Bilibili and more — right from your browser. Free and open source.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/natefox2017/video_downloader/releases" data-i18n="ctaDownload">⬇ Download</a>
+      <a class="btn btn-ghost" href="https://github.com/natefox2017/video_downloader" data-i18n="ctaGithub">GitHub</a>
+    </div>
+    <div class="badges">
+      <span class="badge">Manifest V3</span>
+      <span class="badge">MIT License</span>
+      <span class="badge" data-i18n="badgeNoBuild">No build step</span>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="section-card glass">
+      <h2 data-i18n="featTitle">Features</h2>
+      <p class="lead" data-i18n="featLead">Everything you need to save videos, nothing you don't.</p>
+      <div class="grid">
+        <div class="feature">
+          <div class="icon">🎯</div>
+          <h3 data-i18n="f1t">Smart detection</h3>
+          <p data-i18n="f1d">Automatically detects videos as you play them. The extension icon shows a live count badge.</p>
+        </div>
+        <div class="feature">
+          <div class="icon">⚡</div>
+          <h3 data-i18n="f2t">Batch downloads</h3>
+          <p data-i18n="f2d">Select multiple videos and download them concurrently with adaptive thread control.</p>
+        </div>
+        <div class="feature">
+          <div class="icon">👁</div>
+          <h3 data-i18n="f3t">Video preview</h3>
+          <p data-i18n="f3d">Hover any card and hit play to preview before downloading.</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🔗</div>
+          <h3 data-i18n="f4t">Copy direct link</h3>
+          <p data-i18n="f4d">One click copies the direct video URL to your clipboard.</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🧩</div>
+          <h3 data-i18n="f5t">m3u8 merging</h3>
+          <p data-i18n="f5d">HLS segments are downloaded in parallel and merged into a single file automatically.</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🔊</div>
+          <h3 data-i18n="f6t">Separate audio tracks</h3>
+          <p data-i18n="f6d">Detects DASH video-only streams (e.g. Bilibili) and grabs the audio track too.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="platforms">
+    <div class="section-card glass">
+      <h2 data-i18n="platTitle">Supported platforms</h2>
+      <p class="lead" data-i18n="platLead">Dedicated extractors for popular sites, generic sniffing for everything else.</p>
+      <div class="platforms">
+        <span class="platform"><span class="dot" style="background:#ff0000"></span>YouTube</span>
+        <span class="platform"><span class="dot" style="background:#000"></span>TikTok</span>
+        <span class="platform"><span class="dot" style="background:#161823"></span><span data-i18n="pDouyin">Douyin</span></span>
+        <span class="platform"><span class="dot" style="background:#ff4906"></span><span data-i18n="pKuaishou">Kuaishou</span></span>
+        <span class="platform"><span class="dot" style="background:#00a1d6"></span><span data-i18n="pBili">Bilibili</span></span>
+        <span class="platform"><span class="dot" style="background:#e6162d"></span><span data-i18n="pWeibo">Weibo</span></span>
+        <span class="platform"><span class="dot" style="background:#ff2442"></span><span data-i18n="pXhs">Xiaohongshu</span></span>
+        <span class="platform"><span class="dot" style="background:#ff6a00"></span><span data-i18n="pXigua">Xigua</span></span>
+        <span class="platform"><span class="dot" style="background:#6366f1"></span><span data-i18n="pOther">+ any other site</span></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="section-card glass">
+      <h2 data-i18n="instTitle">Installation</h2>
+      <p class="lead" data-i18n="instLead">Three steps, no build required.</p>
+      <div class="steps">
+        <div class="step"><p data-i18n="s1">Download the latest release ZIP from <a href="https://github.com/natefox2017/video_downloader/releases">GitHub Releases</a> and unzip it.</p></div>
+        <div class="step"><p data-i18n="s2">Open <code>chrome://extensions/</code> and enable <b>Developer mode</b> (top right).</p></div>
+        <div class="step"><p data-i18n="s3">Click <b>Load unpacked</b> and select the unzipped folder. Done!</p></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span data-i18n="footer">MIT Licensed · Made with care ·</span>
+  <a href="https://github.com/natefox2017/video_downloader">GitHub</a>
+</footer>
+
+<script>
+const i18n = {
+  en: {
+    navName: "Video Download Helper", navFeatures: "Features", navPlatforms: "Platforms", navInstall: "Install",
+    heroTitle: "Video Download Helper",
+    heroSub: "Detect and download videos from YouTube, TikTok, Douyin, Bilibili and more — right from your browser. Free and open source.",
+    ctaDownload: "⬇ Download", ctaGithub: "GitHub", badgeNoBuild: "No build step",
+    featTitle: "Features", featLead: "Everything you need to save videos, nothing you don't.",
+    f1t: "Smart detection", f1d: "Automatically detects videos as you play them. The extension icon shows a live count badge.",
+    f2t: "Batch downloads", f2d: "Select multiple videos and download them concurrently with adaptive thread control.",
+    f3t: "Video preview", f3d: "Hover any card and hit play to preview before downloading.",
+    f4t: "Copy direct link", f4d: "One click copies the direct video URL to your clipboard.",
+    f5t: "m3u8 merging", f5d: "HLS segments are downloaded in parallel and merged into a single file automatically.",
+    f6t: "Separate audio tracks", f6d: "Detects DASH video-only streams (e.g. Bilibili) and grabs the audio track too.",
+    platTitle: "Supported platforms", platLead: "Dedicated extractors for popular sites, generic sniffing for everything else.",
+    pDouyin: "Douyin", pKuaishou: "Kuaishou", pBili: "Bilibili", pWeibo: "Weibo", pXhs: "Xiaohongshu", pXigua: "Xigua", pOther: "+ any other site",
+    instTitle: "Installation", instLead: "Three steps, no build required.",
+    s1: 'Download the latest release ZIP from <a href="https://github.com/natefox2017/video_downloader/releases">GitHub Releases</a> and unzip it.',
+    s2: "Open <code>chrome://extensions/</code> and enable <b>Developer mode</b> (top right).",
+    s3: "Click <b>Load unpacked</b> and select the unzipped folder. Done!",
+    footer: "MIT Licensed · Made with care ·",
+  },
+  zh: {
+    navName: "视频下载助手", navFeatures: "功能", navPlatforms: "支持平台", navInstall: "安装",
+    heroTitle: "视频下载助手",
+    heroSub: "在浏览器里直接识别并下载 YouTube、TikTok、抖音、哔哩哔哩等平台的视频。免费开源。",
+    ctaDownload: "⬇ 下载", ctaGithub: "GitHub", badgeNoBuild: "无需构建",
+    featTitle: "功能", featLead: "下载视频需要的一切，不多不少。",
+    f1t: "智能识别", f1d: "播放视频时自动识别，插件图标实时显示数量徽标。",
+    f2t: "批量下载", f2d: "多选视频并发下载，线程数自适应调节。",
+    f3t: "视频预览", f3d: "悬停卡片点播放键，下载前先预览。",
+    f4t: "复制直链", f4d: "一键复制视频直链到剪贴板。",
+    f5t: "m3u8 合并", f5d: "HLS 分片并行下载，自动合并为单个文件。",
+    f6t: "独立音轨", f6d: "识别 DASH 纯视频流（如 B 站），自动补下音轨。",
+    platTitle: "支持平台", platLead: "热门站点专用解析，其他网站通用嗅探。",
+    pDouyin: "抖音", pKuaishou: "快手", pBili: "哔哩哔哩", pWeibo: "微博", pXhs: "小红书", pXigua: "西瓜视频", pOther: "+ 其他任意网站",
+    instTitle: "安装", instLead: "三步搞定，无需构建。",
+    s1: '从 <a href="https://github.com/natefox2017/video_downloader/releases">GitHub Releases</a> 下载最新 ZIP 并解压。',
+    s2: "打开 <code>chrome://extensions/</code>，右上角开启<b>开发者模式</b>。",
+    s3: "点击<b>加载已解压的扩展程序</b>，选择解压后的文件夹。完成！",
+    footer: "MIT 开源协议 · 用心制作 ·",
+  }
+};
+
+function setLang(lang) {
+  const dict = i18n[lang] || i18n.en;
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const key = el.getAttribute("data-i18n");
+    if (dict[key]) el.innerHTML = dict[key];
+  });
+  document.getElementById("lang-en").classList.toggle("active", lang === "en");
+  document.getElementById("lang-zh").classList.toggle("active", lang === "zh");
+  try { localStorage.setItem("vd-lang", lang); } catch (e) {}
+}
+
+function detectLang() {
+  try {
+    const saved = localStorage.getItem("vd-lang");
+    if (saved && i18n[saved]) return saved;
+  } catch (e) {}
+  const nav = (navigator.language || "en").toLowerCase();
+  return nav.startsWith("zh") ? "zh" : "en";
+}
+
+document.getElementById("lang-en").addEventListener("click", () => setLang("en"));
+document.getElementById("lang-zh").addEventListener("click", () => setLang("zh"));
+setLang(detectLang());
+</script>
+</body>
+</html>
