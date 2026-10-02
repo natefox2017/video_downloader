@@ -101,6 +101,8 @@
     weibo: "#e6162d",
     xiaohongshu: "#ff2442",
     xigua: "#ff6a00",
+    youtube: "#ff0000",
+    tiktok: "#000000",
     generic: "#6366f1",
   };
 
