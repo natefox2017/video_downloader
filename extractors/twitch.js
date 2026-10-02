@@ -7,7 +7,8 @@
  *   - 直播：https://usher.ttvnw.net/api/channel/hls/{channel}.m3u8?token=...&sig=...
  *   - 录播：https://usher.ttvnw.net/vod/{vodId}.m3u8?token=...&sig=...
  *
- * 注意：主世界 fetch 可能被页面 CSP 拦截，失败时降级为通用嗅探。
+ * 注意：token 拉取是异步的，detect() 触发后缓存结果，下次轮询上报。
+ * 主世界 fetch 可能被页面 CSP 拦截，失败时降级为通用嗅探。
  */
 
 "use strict";
@@ -37,39 +38,6 @@
     return null;
   }
 
-  async function gqlQuery(body) {
-    try {
-      const response = await fetch(GQL_URL, {
-        method: "POST",
-        headers: { "Client-Id": CLIENT_ID, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) return null;
-      return await response.json();
-    } catch (error) {
-      return null;
-    }
-  }
-
-  /** 取播放 token（直播/录播通用） */
-  async function getPlaybackToken(parsed) {
-    const isLive = parsed.kind === "live";
-    const data = await gqlQuery({
-      operationName: "PlaybackAccessToken",
-      variables: {
-        isLive,
-        login: isLive ? parsed.id : "",
-        isVod: !isLive,
-        vodID: isLive ? "" : parsed.id,
-        playerType: "site",
-        platform: "web",
-      },
-      extensions: { persistedQuery: { version: 1, sha256Hash: TOKEN_HASH } },
-    });
-    if (!data) return null;
-    return isLive ? data?.data?.streamPlaybackAccessToken : data?.data?.videoPlaybackAccessToken;
-  }
-
   function buildHlsUrl(parsed, token) {
     const params =
       `?token=${encodeURIComponent(token.value)}` +
@@ -94,45 +62,76 @@
     return { title, cover };
   }
 
-  let lastKey = "";
+  // ---- 异步 token 缓存 ----
+  let cachedKey = "";
   let cachedMedia = null;
+  let fetchingKey = "";
 
-  async function getMedia() {
+  function ensureToken(parsed) {
+    const key = `${parsed.kind}_${parsed.id}`;
+    if (key === cachedKey || key === fetchingKey) return;
+    fetchingKey = key;
+
+    const isLive = parsed.kind === "live";
+    fetch(GQL_URL, {
+      method: "POST",
+      headers: { "Client-Id": CLIENT_ID, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationName: "PlaybackAccessToken",
+        variables: {
+          isLive,
+          login: isLive ? parsed.id : "",
+          isVod: !isLive,
+          vodID: isLive ? "" : parsed.id,
+          playerType: "site",
+          platform: "web",
+        },
+        extensions: { persistedQuery: { version: 1, sha256Hash: TOKEN_HASH } },
+      }),
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        const token = isLive
+          ? data?.data?.streamPlaybackAccessToken
+          : data?.data?.videoPlaybackAccessToken;
+        if (!token) return;
+        const hlsUrl = buildHlsUrl(parsed, token);
+        const meta = getMeta();
+        const label = parsed.kind === "live" ? "直播" : "录播";
+        const title = meta.title || `twitch_${label}_${parsed.id}`;
+        cachedKey = key;
+        cachedMedia = {
+          shareUrl: location.href,
+          title: X.safeText(title).trim(),
+          desc: "",
+          author: parsed.kind === "live" ? parsed.id : "未知作者",
+          cover: X.absolutize(meta.cover),
+          duration: 0,
+          size: 0,
+          type: "视频",
+          fileName: X.sanitizeFileName(`twitch_${parsed.id}_${title.trim()}`.slice(0, 64)) || `twitch_${parsed.id}`,
+          videoUrl: hlsUrl,
+          videoUrls: [hlsUrl],
+          audioUrl: "",
+          imageUrls: [],
+        };
+      })
+      .catch(() => { /* CSP 拦截或网络失败，降级走通用嗅探 */ })
+      .finally(() => { fetchingKey = ""; });
+  }
+
+  function detect() {
     const parsed = parseTwitchUrl(location.href);
     if (!parsed || parsed.kind === "clip") return null; // 剪辑走通用嗅探（多为直链 MP4）
     const key = `${parsed.kind}_${parsed.id}`;
-    if (key === lastKey && cachedMedia) return cachedMedia;
-
-    const token = await getPlaybackToken(parsed);
-    if (!token) return null;
-
-    const hlsUrl = buildHlsUrl(parsed, token);
-    const meta = getMeta();
-    const label = parsed.kind === "live" ? "直播" : "录播";
-    const title = meta.title || `twitch_${label}_${parsed.id}`;
-
-    const media = {
-      shareUrl: location.href,
-      platformId: "twitch",
-      platform: "Twitch",
-      title: X.safeText(title).trim(),
-      desc: "",
-      author: parsed.kind === "live" ? parsed.id : "未知作者",
-      cover: X.absolutize(meta.cover),
-      duration: 0,
-      size: 0,
-      type: "视频",
-      fileName: X.sanitizeFileName(`twitch_${parsed.id}_${title.trim()}`.slice(0, 64)) || `twitch_${parsed.id}`,
-      videoUrl: hlsUrl,
-      videoUrls: [hlsUrl],
-      audioUrl: "",
-      imageUrls: [],
-      source: "页面解析",
-    };
-    lastKey = key;
-    cachedMedia = media;
-    return media;
+    if (key === cachedKey && cachedMedia) return cachedMedia;
+    ensureToken(parsed);
+    return key === cachedKey ? cachedMedia : null;
   }
 
-  X.create("twitch", { getMedia });
+  X.create("twitch", {
+    platformName: "Twitch",
+    pollInterval: 2000,
+    detect,
+  });
 })();

@@ -22,48 +22,45 @@
       .replace(/&amp;/g, "&");
   }
 
-  /** 从页面源码提取视频地址 */
+  /** 从页面源码提取视频地址（同步） */
   function extractVideoUrls() {
     const urls = [];
     const seen = new Set();
-
-    // 1. "video_url":"https://..."（转义形式）
-    const pattern1 = /"video_url"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-    const found1 = X.scanScriptUrls ? null : null; // 占位，下方手动扫
-    void found1;
-
     const scripts = document.querySelectorAll("script");
-    for (const script of scripts) {
-      const text = script.textContent || "";
-      if (!text || !text.includes("video_url")) continue;
-      const slice = text.length > 2 * 1024 * 1024 ? text.slice(0, 2 * 1024 * 1024) : text;
-      pattern1.lastIndex = 0;
-      let match;
-      while ((match = pattern1.exec(slice)) !== null) {
-        const url = unescapeUrl(match[1]);
-        if (url.startsWith("http") && !seen.has(url)) {
-          seen.add(url);
-          urls.push(url);
-        }
-      }
-    }
 
-    // 2. video_versions 数组里的 url（多清晰度，取最高）
-    const pattern2 = /"video_versions"\s*:\s*\[([^\]]+)\]/g;
     for (const script of scripts) {
       const text = script.textContent || "";
-      if (!text || !text.includes("video_versions")) continue;
+      if (!text) continue;
       const slice = text.length > 2 * 1024 * 1024 ? text.slice(0, 2 * 1024 * 1024) : text;
-      pattern2.lastIndex = 0;
-      let match;
-      while ((match = pattern2.exec(slice)) !== null) {
-        const urlPattern = /"url"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-        let um;
-        while ((um = urlPattern.exec(match[1])) !== null) {
-          const url = unescapeUrl(um[1]);
+
+      // 1. "video_url":"https://..."
+      if (slice.includes("video_url")) {
+        const pattern = /"video_url"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(slice)) !== null) {
+          const url = unescapeUrl(match[1]);
           if (url.startsWith("http") && !seen.has(url)) {
             seen.add(url);
             urls.push(url);
+          }
+        }
+      }
+
+      // 2. video_versions 数组里的 url（多清晰度）
+      if (slice.includes("video_versions")) {
+        const vp = /"video_versions"\s*:\s*\[([^\]]+)\]/g;
+        vp.lastIndex = 0;
+        let vm;
+        while ((vm = vp.exec(slice)) !== null) {
+          const urlPattern = /"url"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+          let um;
+          while ((um = urlPattern.exec(vm[1])) !== null) {
+            const url = unescapeUrl(um[1]);
+            if (url.startsWith("http") && !seen.has(url)) {
+              seen.add(url);
+              urls.push(url);
+            }
           }
         }
       }
@@ -81,40 +78,26 @@
       if (ogTitle) title = ogTitle.content || "";
       const ogImage = document.querySelector('meta[property="og:image"]');
       if (ogImage) cover = ogImage.content || "";
-      // 作者：URL 路径第一段
       const pathMatch = location.pathname.match(/^\/([^/]+)\//);
       if (pathMatch) author = pathMatch[1];
     } catch (error) { /* 忽略 */ }
     return { title, author, cover };
   }
 
-  /** 短链接 ID（/reel/xxx、/p/xxx）用于缓存键 */
-  function getPostId() {
-    const match = location.pathname.match(/\/(?:reel|p|tv)\/([^/]+)/);
-    return match ? match[1] : location.href;
-  }
-
-  let lastKey = "";
-  let cachedMedia = null;
-
-  function getMedia() {
-    // 只在帖子/ reel 页抓取
+  function detect() {
+    // 只在帖子 / reel 页抓取
     if (!/\/(reel|p|tv)\//.test(location.pathname)) return null;
-
-    const key = getPostId();
-    if (key === lastKey && cachedMedia) return cachedMedia;
 
     const urls = extractVideoUrls();
     if (!urls.length) return null;
 
     const meta = getMeta();
+    const key = location.pathname.match(/\/(?:reel|p|tv)\/([^/]+)/)?.[1] || "post";
     const title = meta.title || `instagram_${key}`;
     const author = meta.author || "未知作者";
 
-    const media = {
+    return {
       shareUrl: location.href,
-      platformId: "instagram",
-      platform: "Instagram",
       title: X.safeText(title).trim().slice(0, 80),
       desc: "",
       author,
@@ -127,12 +110,12 @@
       videoUrls: urls,
       audioUrl: "",
       imageUrls: [],
-      source: "页面解析",
     };
-    lastKey = key;
-    cachedMedia = media;
-    return media;
   }
 
-  X.create("instagram", { getMedia });
+  X.create("instagram", {
+    platformName: "Instagram",
+    pollInterval: 2000,
+    detect,
+  });
 })();

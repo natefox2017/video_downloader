@@ -7,7 +7,8 @@
  *   - files.progressive[]：MP4 直链（音画合并），优先用；
  *   - files.hls.cdns：HLS 地址，兜底。
  *
- * 注意：主世界 fetch 可能被页面 CSP 拦截，失败时降级为通用嗅探。
+ * 注意：config 拉取是异步的，detect() 触发后缓存结果，下次轮询上报。
+ * 主世界 fetch 可能被页面 CSP 拦截，失败时降级为通用嗅探。
  */
 
 "use strict";
@@ -26,7 +27,7 @@
     return match ? match[1] : null;
   }
 
-  /** 读页面内嵌的播放器配置 */
+  /** 读页面内嵌的播放器配置（同步） */
   function findEmbeddedConfig() {
     try {
       if (window.vimeo && window.vimeo.config) return window.vimeo.config;
@@ -35,21 +36,7 @@
     return null;
   }
 
-  /** 从播放器页面拉取配置（主世界 fetch，可能被 CSP 拦截） */
-  async function fetchPlayerConfig(videoId) {
-    try {
-      const response = await fetch(`https://player.vimeo.com/video/${videoId}/config`, {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) return null;
-      return await response.json();
-    } catch (error) {
-      return null;
-    }
-  }
-
-  /** 从 config 整理出 media */
+  /** 从 config 整理出 media（同步） */
   function buildMedia(config, videoId) {
     const files = config?.request?.files;
     if (!files) return null;
@@ -86,8 +73,6 @@
 
     return {
       shareUrl: location.href,
-      platformId: "vimeo",
-      platform: "Vimeo",
       title: title.trim(),
       desc: X.safeText(videoData.description),
       author,
@@ -100,29 +85,61 @@
       videoUrls,
       audioUrl: "",
       imageUrls: [],
-      source: "页面解析",
     };
   }
 
-  let lastVideoId = "";
+  // ---- 异步 config 缓存：detect() 触发拉取，下次轮询返回 ----
+  let cachedVideoId = "";
   let cachedMedia = null;
+  let fetchingId = "";
 
-  async function getMedia() {
-    const videoId = extractVideoId(location.href);
-    if (!videoId) return null;
-    if (videoId === lastVideoId && cachedMedia) return cachedMedia;
-
-    let config = findEmbeddedConfig();
-    if (!config) config = await fetchPlayerConfig(videoId);
-    if (!config) return null;
-
-    const media = buildMedia(config, videoId);
-    if (media) {
-      lastVideoId = videoId;
-      cachedMedia = media;
-    }
-    return media;
+  function ensureConfig(videoId) {
+    if (videoId === cachedVideoId || videoId === fetchingId) return;
+    fetchingId = videoId;
+    fetch(`https://player.vimeo.com/video/${videoId}/config`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((config) => {
+        if (config) {
+          const media = buildMedia(config, videoId);
+          if (media) {
+            cachedVideoId = videoId;
+            cachedMedia = media;
+          }
+        }
+      })
+      .catch(() => { /* CSP 拦截或网络失败，降级走通用嗅探 */ })
+      .finally(() => { fetchingId = ""; });
   }
 
-  X.create("vimeo", { getMedia });
+  function detect() {
+    const videoId = extractVideoId(location.href);
+    if (!videoId) return null;
+
+    // 1. 内嵌配置：同步直接返回
+    const embedded = findEmbeddedConfig();
+    if (embedded) {
+      const media = buildMedia(embedded, videoId);
+      if (media) {
+        cachedVideoId = videoId;
+        cachedMedia = media;
+        return media;
+      }
+    }
+
+    // 2. 缓存命中
+    if (videoId === cachedVideoId && cachedMedia) return cachedMedia;
+
+    // 3. 触发异步拉取，本次返回 null，下次轮询上报
+    ensureConfig(videoId);
+    return cachedVideoId === videoId ? cachedMedia : null;
+  }
+
+  X.create("vimeo", {
+    platformName: "Vimeo",
+    pollInterval: 2000,
+    detect,
+  });
 })();
