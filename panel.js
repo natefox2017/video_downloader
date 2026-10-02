@@ -464,20 +464,10 @@
     toast("正在解析原画…");
     try {
       // 原画接口：302 跳转到 CDN 直链（参考 jiuhunwl/short_videos）
+      // 直接跟随跳转，response.url 即最终 CDN 地址（body 不读取，不下载内容）
       const apiUrl = `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(vid)}&ratio=default&line=0`;
-      const response = await fetch(apiUrl, { redirect: "manual" });
-      let originUrl = "";
-      if (response.type === "opaqueredirect" || response.status === 302 || response.status === 301) {
-        originUrl = response.headers.get("Location") || "";
-      } else {
-        // 部分环境自动跟随跳转，直接取最终地址
-        originUrl = response.url || "";
-      }
-      // 兜底：手动跟随一次
-      if (!originUrl || originUrl === apiUrl) {
-        const follow = await fetch(apiUrl, { redirect: "follow" });
-        originUrl = follow.url || "";
-      }
+      const response = await fetch(apiUrl, { redirect: "follow" });
+      const originUrl = response.url || "";
       if (!originUrl || originUrl === apiUrl) throw new Error("未解析到原画地址");
 
       try {
