@@ -268,30 +268,33 @@
     shadow.innerHTML = `
       <style>
         .vd-panel {
-          --vd-width: 350px;
-          --vd-height: 42vh;
+          --vd-width: 360px;
+          --vd-max-height: 68vh;
           position: fixed;
           top: 16px;
           right: 16px;
           width: var(--vd-width);
           display: flex;
           flex-direction: column;
-          background: #ffffff;
-          border-radius: 12px;
-          box-shadow: 0 14px 40px rgba(0, 0, 0, .28), 0 0 0 1px rgba(0, 0, 0, .06);
+          background: rgba(255, 255, 255, 0.72);
+          -webkit-backdrop-filter: blur(24px) saturate(180%);
+          backdrop-filter: blur(24px) saturate(180%);
+          border-radius: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.6);
+          box-shadow: 0 14px 40px rgba(0, 0, 0, .22);
           overflow: hidden;
           font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
           color: #1f2329;
         }
         .vd-panel__bar {
-          flex: 0 0 34px;
-          height: 34px;
+          flex: 0 0 36px;
+          height: 36px;
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 0 6px 0 10px;
-          background: #ffffff;
-          border-bottom: 1px solid #eef0f3;
+          padding: 0 6px 0 12px;
+          background: rgba(255, 255, 255, 0.4);
+          border-bottom: 1px solid rgba(0, 0, 0, 0.06);
           cursor: move;
           user-select: none;
         }
@@ -333,7 +336,8 @@
         .vd-panel__btn:hover { background: #f2f3f5; color: #1f2329; }
         .vd-panel__body {
           position: relative;
-          height: var(--vd-height);
+          height: 320px;
+          max-height: var(--vd-max-height);
           min-height: 0;
         }
         .vd-panel.collapsed .vd-panel__body { display: none; }
@@ -342,7 +346,7 @@
           height: 100%;
           border: 0;
           display: block;
-          background: #fff;
+          background: transparent;
         }
         .vd-panel__loading {
           position: absolute;
@@ -505,6 +509,16 @@
       case "panel_ready":
         sendToPanel({ type: "media_list", items: buildPanelItems() });
         break;
+      case "panel_resize": {
+        // iframe 上报内容高度 → 自适应面板高度（不超过最大高度）
+        const body = host?.shadowRoot?.querySelector(".vd-panel__body");
+        if (body && typeof data.height === "number" && data.height > 0) {
+          const maxPx = Math.floor(window.innerHeight * 0.68);
+          const h = Math.max(200, Math.min(Math.ceil(data.height), maxPx));
+          body.style.height = h + "px";
+        }
+        break;
+      }
       case "start_download":
         startBatchDownload(Array.isArray(data.shareUrls) ? data.shareUrls : []);
         break;

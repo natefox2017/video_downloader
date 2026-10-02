@@ -264,6 +264,17 @@
     }).join("");
 
     renderToolbar();
+    reportHeight();
+  }
+
+  /** 上报内容高度 → content.js 自适应面板高度 */
+  let resizeTimer = null;
+  function reportHeight() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const h = document.documentElement.scrollHeight;
+      post({ type: "panel_resize", height: h });
+    }, 50);
   }
 
   /** 只刷新某一行的下载状态 */
