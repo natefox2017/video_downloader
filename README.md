@@ -1,5 +1,7 @@
 # video_downloader
 
+> GitHub: https://github.com/natefox2017/video_downloader
+
 A Chrome extension (Manifest V3) that automatically detects videos on web pages and downloads them.
 
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
