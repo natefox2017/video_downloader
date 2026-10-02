@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 jobs:
-  quick:
+  repository-policy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
