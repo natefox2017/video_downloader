@@ -45,6 +45,18 @@
     return urls;
   }
 
+  /** 从 __playinfo__ 取 DASH 音轨地址（视频轨无声时用） */
+  function pickAudioUrl(playinfo) {
+    const audios = Array.isArray(playinfo?.data?.dash?.audio)
+      ? [...playinfo.data.dash.audio].sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))
+      : [];
+    for (const item of audios) {
+      const url = X.absolutize(item.baseUrl || item.base_url);
+      if (url) return url;
+    }
+    return "";
+  }
+
   /** 估算大小：durl 自带 size；dash 用 bandwidth × duration 粗估 */
   function pickSize(playinfo) {
     const data = playinfo?.data || {};
@@ -96,6 +108,7 @@
       type: "视频",
       size: pickSize(playinfo),
       videoUrls,
+      audioUrl: pickAudioUrl(playinfo), // DASH 音轨：视频轨无声时 content.js 会单独下载
       fileName: "",
     };
   }
