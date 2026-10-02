@@ -515,7 +515,7 @@
         const body = host?.shadowRoot?.querySelector(".vd-panel__body");
         if (body && typeof data.height === "number" && data.height > 0) {
           const maxPx = Math.floor(window.innerHeight * 0.68);
-          const h = Math.max(200, Math.min(Math.ceil(data.height), maxPx));
+          const h = Math.max(420, Math.min(Math.ceil(data.height), maxPx));
           body.style.height = h + "px";
         }
         break;

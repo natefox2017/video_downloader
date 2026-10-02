@@ -278,6 +278,7 @@ body {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .card:hover {
