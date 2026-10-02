@@ -38,9 +38,11 @@ html, body {
 body {
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
-  backdrop-filter: blur(20px) saturate(160%);
+  background: transparent;
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
 }
 
 /* ---------------- 搜索栏 ---------------- */
@@ -311,6 +313,8 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  padding: 2px 0;
 }
 
 .card__title {
@@ -434,10 +438,13 @@ body {
   align-items: center;
   justify-content: center;
   transition: all .15s ease;
-  opacity: 0;
+  opacity: 1;
 }
 
-.card:hover .icon-btn { opacity: 1; }
+.icon-btn:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
 
 .icon-btn:hover {
   background: var(--text);
