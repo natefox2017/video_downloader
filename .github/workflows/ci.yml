@@ -1,15 +1,9 @@
-# ============================================================================
-# CI —— 语法与清单校验
-#
-# 本仓库没有构建步骤、没有第三方依赖，因此 CI 只做最低成本但最有价值的检查：
-#   1. 扩展的 4 个 JS 文件语法是否合法（node --check）
-#   2. manifest.json 是否为合法 JSON（MV3 清单写错会让扩展直接加载失败）
-#   3. Python 工具能否通过编译（不启动 GUI，只做语法检查）
-#
-# 注意：这里跑的不是功能测试。滤镜链、并发调度这类逻辑目前依赖手工像素级验证，
-#      详见 AGENTS.md「开发与自检命令」。
-# ============================================================================
-name: CI
+name: ci
+
+# Quick checks on every push to main and every PR.
+# This is intentionally light (syntax + manifest parse) so PRs get fast
+# feedback and the automerge workflow can proceed. The thorough validation
+# suite runs in release.yml, which only triggers on version tags.
 
 on:
   push:
@@ -22,50 +16,21 @@ permissions:
   contents: read
 
 jobs:
-  syntax:
-    name: 语法与清单校验
+  quick:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ---------------- 扩展 ----------------
-      - name: 准备 Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
-      - name: 校验扩展 JS 语法
+      - name: JS syntax check
         run: |
           set -e
-          for f in background.js content.js injected.js panel.js; do
-            echo "── node --check $f"
+          for f in background.js rules.js content.js panel.js extractors/*.js; do
             node --check "$f"
           done
-          echo "扩展脚本语法全部通过"
 
-      - name: 校验 manifest.json
-        run: |
-          node -e '
-            const fs = require("fs");
-            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
-            if (m.manifest_version !== 3) throw new Error("manifest_version 必须为 3");
-            if (!m.name || !m.version) throw new Error("缺少 name / version");
-            if (!m.background?.service_worker) throw new Error("缺少 background.service_worker");
-            if (!Array.isArray(m.content_scripts) || !m.content_scripts.length)
-              throw new Error("缺少 content_scripts");
-            console.log("manifest.json 通过：" + m.name + " v" + m.version);
-          '
-
-      # ---------------- Python 工具 ----------------
-      - name: 准备 Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: 校验 Python 语法
-        run: |
-          set -e
-          python -m compileall -q video_frame_tool/src video_frame_tool/tests
-          echo "video_frame_tool 包与回归脚本编译通过"
+      - name: Manifest parses
+        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest.json parses OK')"

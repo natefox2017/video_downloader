@@ -2,9 +2,12 @@
  * panel.js —— 浮层面板的界面逻辑（纯原生 JS，无框架）
  *
  * 面板只负责“展示列表 + 收集选择 + 下发指令”，真正的下载由父页面里的 content.js 执行；
- * 双方通过 postMessage 通信（面板在 iframe 中，与抖音页面跨源）：
+ * 双方通过 postMessage 通信（面板在 iframe 中，与页面跨源）：
  *   content → panel : media_list / item_status / batch_* / toast
  *   panel → content : panel_ready / start_download / stop_download
+ *
+ * 列表条目额外携带 platform（平台名）与 source（页面解析 / DOM嗅探 / 网络嗅探），
+ * 渲染为每行的小标签，方便分辨每条视频的来源。
  */
 
 (() => {
@@ -64,7 +67,7 @@
 
   /** 向父页面（content.js）发送指令 */
   function post(message) {
-    window.parent.postMessage({ source: "dy-dl-panel", ...message }, "*");
+    window.parent.postMessage({ source: "vd-panel", ...message }, "*");
   }
 
   /* ---------------- 渲染 ---------------- */
@@ -156,6 +159,7 @@
               <div class="row__title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
               <div class="row__meta">
                 <span class="${tagClass}">${escapeHtml(item.type || "视频")}</span>
+                <span class="tag tag--src">${escapeHtml(item.platform || "")} · ${escapeHtml(item.source || "")}</span>
                 <span>${escapeHtml(item.author || "")}</span>
               </div>
               <div class="row__bar"><div class="row__bar-inner" style="width:${item.progress || 0}%"></div></div>
@@ -291,7 +295,7 @@
 
   window.addEventListener("message", (event) => {
     const message = event.data;
-    if (!message || message.source !== "dy-dl-content") return;
+    if (!message || message.source !== "vd-content") return;
 
     switch (message.type) {
       case "media_list":
