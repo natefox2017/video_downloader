@@ -185,6 +185,12 @@ body {
   color: var(--color-success);
 }
 
+/* 平台 · 来源标识（例：抖音 · 页面解析 / 通用 · 网络嗅探） */
+.tag--src {
+  background: #f2f0fd;
+  color: #7c6cf0;
+}
+
 /* 下载状态：进度条 / 完成 / 失败 */
 .row__state {
   flex: 0 0 auto;

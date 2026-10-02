@@ -1,47 +1,104 @@
 {
-   "manifest_version": 3,
-   "name": "抖抖抖 抖音视频下载器 (批量下载)",
-   "version": "2.2.0",
-   "description": "什么垃圾东西 还好意思加密出来卖。",
-   "action": {
-      "default_title": "抖抖抖 抖音视频下载"
-   },
-   "background": {
-      "service_worker": "background.js"
-   },
-   "content_scripts": [
-      {
-         "js": [ "content.js" ],
-         "matches": [ "*://*.douyin.com/*" ],
-         "run_at": "document_end"
-      }
-   ],
-   "permissions": [ "scripting" ],
-   "host_permissions": [
-      "https://*.douyin.com/*",
-      "https://*.douyinvod.com/*",
-      "https://*.douyinpic.com/*",
-      "https://*.douyinstatic.com/*",
-      "https://*.byteimg.com/*",
-      "https://*.zjcdn.com/*",
-      "https://*.ixigua.com/*",
-      "https://*.pstatp.com/*"
-   ],
-   "icons": {
-      "16": "images/16.png",
-      "32": "images/32.png",
-      "128": "images/128.png"
-   },
-   "web_accessible_resources": [
-      {
-         "matches": [ "*://*.douyin.com/*" ],
-         "resources": [
-            "injected.js",
-            "panel.html",
-            "panel.js",
-            "panel.css",
-            "images/*"
-         ]
-      }
-   ]
+  "action": {
+    "default_title": "视频下载助手"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "rules.js",
+        "content.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_end"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/douyin.js"
+      ],
+      "matches": [
+        "*://*.douyin.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/kuaishou.js"
+      ],
+      "matches": [
+        "*://*.kuaishou.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/bilibili.js"
+      ],
+      "matches": [
+        "*://*.bilibili.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/weibo.js"
+      ],
+      "matches": [
+        "*://*.weibo.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "js": [
+        "extractors/common.js",
+        "extractors/xiaohongshu.js"
+      ],
+      "matches": [
+        "*://*.xiaohongshu.com/*",
+        "*://*.xhslink.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    }
+  ],
+  "description": "自动识别并下载网页中的视频：支持抖音、快手、哔哩哔哩、微博、小红书等主流平台，未覆盖的网站自动嗅探直链与 m3u8。",
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "128": "images/128.png",
+    "16": "images/16.png",
+    "32": "images/32.png"
+  },
+  "manifest_version": 3,
+  "name": "视频下载助手",
+  "permissions": [
+    "scripting"
+  ],
+  "version": "2.3.0",
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "panel.html",
+        "panel.js",
+        "panel.css",
+        "images/*"
+      ]
+    }
+  ]
 }

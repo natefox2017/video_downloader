@@ -1,7 +1,6 @@
 # ============================================================================
 # .gitattributes —— 统一换行符与文件类型判定
-# 目的：跨平台协作时避免「整文件 diff」；Windows 上 checkout 后仍是 LF，
-#      因为本项目全部是 JS / Python / Markdown 文本，不存在需要 CRLF 的 .bat。
+# 目的：跨平台协作时避免「整文件 diff」；Windows 上 checkout 后仍是 LF。
 # ============================================================================
 
 # 默认：由 Git 自动识别文本文件，仓库内统一存 LF
@@ -14,7 +13,6 @@
 *.json    text eol=lf
 *.html    text eol=lf
 *.css     text eol=lf
-*.py      text eol=lf
 *.md      text eol=lf
 *.sh      text eol=lf
 *.yml     text eol=lf
