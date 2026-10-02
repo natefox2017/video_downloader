@@ -274,7 +274,13 @@
   function reportHeight() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-      const h = document.documentElement.scrollHeight;
+      // 各区域实际高度求和（list 取内容全高，由外部卡最大高度）
+      const topbar = document.querySelector(".topbar")?.offsetHeight || 0;
+      const toolbar = document.querySelector(".toolbar")?.offsetHeight || 0;
+      const filters = document.querySelector(".filters")?.offsetHeight || 0;
+      const listContent = listEl.scrollHeight || 0;
+      const actionbar = document.querySelector(".actionbar")?.offsetHeight || 0;
+      const h = topbar + toolbar + filters + listContent + actionbar + 24;
       post({ type: "panel_resize", height: h });
     }, 50);
   }
