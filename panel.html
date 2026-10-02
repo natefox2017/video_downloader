@@ -62,6 +62,18 @@
   <!-- 轻提示 -->
   <div class="toast" id="toast"></div>
 
+  <!-- 视频预览弹框 -->
+  <div class="preview" id="preview">
+    <div class="preview__backdrop" id="preview-backdrop"></div>
+    <div class="preview__dialog">
+      <div class="preview__head">
+        <span class="preview__title" id="preview-title"></span>
+        <button class="preview__close" id="preview-close" title="关闭">✕</button>
+      </div>
+      <video class="preview__video" id="preview-video" controls playsinline></video>
+    </div>
+  </div>
+
   <script src="panel.js"></script>
 </body>
 </html>
