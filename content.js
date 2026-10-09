@@ -464,7 +464,7 @@
         }
         .vd-panel__body {
           position: relative;
-          height: 180px;
+          height: 140px;
           max-height: var(--vd-max-height);
           min-height: 0;
           background: #ffffff;
@@ -676,12 +676,20 @@
   function pushMediaList() {
     const items = buildPanelItems();
     sendToPanel({ type: "media_list", items });
+    const registryItems = items.map((item) => ({
+      shareUrl: item.shareUrl,
+      title: item.title,
+      size: item.size,
+      quality: item.quality,
+      platform: item.platform,
+      status: item.status,
+    }));
     chrome.runtime.sendMessage({
       type: "update_media_registry",
       pageUrl: location.href,
       pageTitle: document.title || location.hostname,
       platform: currentPlatform.name,
-      items,
+      items: registryItems,
     }).catch(() => {});
   }
 
@@ -940,29 +948,45 @@
     }
   }
 
-  /** 从主播放列表（master）里选带宽最高的一路 */
+  /** 从主播放列表里按用户清晰度偏好选择一路；缺少分辨率时退回带宽。 */
   function pickBestVariant(masterText, masterUrl) {
     const lines = masterText.split("\n");
-    let bestBandwidth = -1;
-    let bestUri = "";
+    const variants = [];
+
     for (let i = 0; i < lines.length; i++) {
-      const match = lines[i].match(/#EXT-X-STREAM-INF:[^\n]*BANDWIDTH=(\d+)/);
-      if (match) {
-        const bandwidth = Number(match[1]);
-        // URI 在下一行（非 # 开头）
-        for (let j = i + 1; j < lines.length; j++) {
-          const uri = lines[j].trim();
-          if (!uri) continue;
-          if (uri.startsWith("#")) break;
-          if (bandwidth > bestBandwidth) {
-            bestBandwidth = bandwidth;
-            bestUri = uri;
-          }
-          break;
-        }
+      const line = lines[i];
+      if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+      const bandwidth = Number(line.match(/BANDWIDTH=(\d+)/)?.[1] || 0);
+      const resolution = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+      const height = resolution ? Number(resolution[2]) : 0;
+
+      for (let j = i + 1; j < lines.length; j++) {
+        const uri = lines[j].trim();
+        if (!uri) continue;
+        if (uri.startsWith("#")) break;
+        variants.push({ uri, bandwidth, height });
+        break;
       }
     }
-    return bestUri ? resolveM3u8Url(bestUri, masterUrl) : "";
+
+    if (!variants.length) return "";
+
+    const target = Number(extensionSettings.quality);
+    variants.sort((a, b) => {
+      if (extensionSettings.quality === "smallest") {
+        if (a.bandwidth !== b.bandwidth) return a.bandwidth - b.bandwidth;
+        return a.height - b.height;
+      }
+      if (target > 0) {
+        const ad = a.height ? Math.abs(a.height - target) : Number.MAX_SAFE_INTEGER;
+        const bd = b.height ? Math.abs(b.height - target) : Number.MAX_SAFE_INTEGER;
+        if (ad !== bd) return ad - bd;
+      }
+      if (a.height !== b.height) return b.height - a.height;
+      return b.bandwidth - a.bandwidth;
+    });
+
+    return resolveM3u8Url(variants[0].uri, masterUrl);
   }
 
   /**

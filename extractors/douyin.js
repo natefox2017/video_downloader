@@ -30,6 +30,23 @@
     return urls;
   }
 
+  /** 把 bitRateList 里实际存在的不同视频源整理成可选清晰度。 */
+  function collectVariants(video) {
+    const variants = [];
+    const list = Array.isArray(video?.bitRateList) ? video.bitRateList : [];
+    for (const item of list) {
+      const url = X.absolutize(item?.playApi || item?.playAddr?.[0]?.src || "");
+      if (!url) continue;
+      const height = Number(item?.height || item?.playAddr?.[0]?.height || 0);
+      const bitrate = Number(item?.bitRate || item?.bit_rate || 0);
+      const size = Number(item?.file_size || item?.dataSize || 0);
+      const label = X.safeText(item?.gearName || item?.gear_name || item?.qualityType || "")
+        || (height ? height + "p" : bitrate ? Math.round(bitrate / 1000) + " kbps" : "");
+      variants.push({ url, label, height, bitrate, size, mimeType: "video/mp4" });
+    }
+    return variants;
+  }
+
   /** 从 music 对象里挑音频直链（视频无音轨时补救用） */
   function pickAudioUrl(music) {
     if (!music) return "";
@@ -107,6 +124,7 @@
       size: pickFileSize(video),
       fileName: buildFileName(awemeInfo),
       videoUrls,
+      variants: collectVariants(video),
       audioUrl: pickAudioUrl(awemeInfo.music),
       originVid: pickVid(video),
       imageUrls: images

@@ -110,7 +110,7 @@
               <div class="row__title" title="${escapeHtml(item.title || "视频")}">${escapeHtml(item.title || "视频")}</div>
               ${status ? `<span class="${stateClass(item)}">${escapeHtml(status)}</span>` : ""}
             </div>
-            <div class="row__size">${escapeHtml(formatSize(item.size))}</div>
+            <div class="row__size">${escapeHtml([formatSize(item.size), item.quality].filter(Boolean).join(" · "))}</div>
             <div class="row__progress">
               <div class="row__progress-inner" style="width:${item.progress || 0}%"></div>
             </div>

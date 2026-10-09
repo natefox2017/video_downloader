@@ -50,7 +50,15 @@
       if (f.url) {
         const text = X.absolutize(f.url);
         if (text && !urls.includes(text)) {
-          urls.push({ url: text, label: f.qualityLabel || "", size: 0 });
+          urls.push({
+            url: text,
+            label: f.qualityLabel || "",
+            width: Number(f.width) || 0,
+            height: Number(f.height) || parseInt(f.qualityLabel) || 0,
+            bitrate: Number(f.bitrate) || 0,
+            size: Number(f.contentLength) || 0,
+            mimeType: f.mimeType || "",
+          });
         }
       }
     }
@@ -126,8 +134,9 @@
       cover,
       duration: parseInt(details.lengthSeconds) || 0,
       type: "视频",
-      size: 0,
+      size: progressive[0]?.size || 0,
       videoUrls,
+      variants: progressive,
       audioUrl,
       fileName: "",
     };

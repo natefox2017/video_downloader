@@ -153,6 +153,7 @@ window.VDExtractor = (() => {
         size: 0,
         type: "视频",
         videoUrls: [],
+        variants: [],
         imageUrls: [],
         audioUrl: "",
         ...media,

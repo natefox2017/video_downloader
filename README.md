@@ -14,7 +14,9 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
 - **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
 - **Extension icon badge**: shows the number of detected videos on the current tab in real time
-- **Compact panel UI**: shows video title, file size, a small preview thumbnail, selection when needed, and essential download status
+- **Cross-tab queue**: the Settings page aggregates detected videos from all open tabs and can dispatch one batch download across multiple sites
+- **Settings page**: source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, remembered panel position, repository and bug-report links
+- **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status
 - **Batch downloads**: newly detected videos are selected automatically; when multiple videos are present, uncheck any you do not want
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
@@ -49,10 +51,11 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 
 1. Open any supported video site and **play** a video (played videos are the ones that get recorded)
 2. The extension icon shows a badge with the detected video count
-3. Click the icon → floating panel appears in the top-right corner
+3. Click the icon → floating panel appears; its last dragged position is restored when enabled in Settings
 4. Check the rows you want (newly detected videos are selected automatically)
 5. Click **Download selected**
-6. Files land in your browser's default download directory
+6. For cross-site batches, open the panel's Settings button and use **Detected videos** to select media from multiple open tabs
+7. Files land in your browser's default download directory
 
 ### Panel guide
 
@@ -61,6 +64,7 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 | Result row | Shows a small preview thumbnail, video title, file size, and selection when multiple videos are detected |
 | Preview | Click the thumbnail to open a compact video preview |
 | Bottom bar | Download the selected video(s) or stop the active batch |
+| Panel header | Shows the extension version; Settings opens the standalone options page; collapsed mode becomes a circular download button |
 
 ## Supported platforms
 
@@ -135,8 +139,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Download behavior
 
-- **Direct links**: candidate URLs tried in order until one succeeds
-- **m3u8**: highest-bitrate variant selected → segments downloaded concurrently (6 workers) → merged
+- **Direct links**: candidate URLs are ordered by the saved format / quality preference when real variant metadata is available, then tried with fallback
+- **m3u8**: master-playlist variants follow the saved quality preference when resolution metadata is present → segments downloaded concurrently (6 workers) → merged
 - **DASH video-only** (e.g. Bilibili): separate audio track downloaded automatically as `*_audio.m4a`
 - **Concurrency**: adaptive — `memory budget × 70% ÷ avg video size`, clamped to 2–16 workers; heap pressure monitored live
 - **Encrypted streams** (`EXT-X-KEY`): reported as unsupported, never silently skipped
@@ -148,3 +152,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To add a platform, see [docs/ADD_PLATFOR
 ## License
 
 [MIT](LICENSE)
+
+
+## Settings implementation
+
+The standalone options page uses vendored **Pico CSS 2.1.1 (MIT)**. It does not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
+
+The cross-tab detected-video list is stored temporarily in `chrome.storage.session`. Only identifying display fields and the per-tab media key are stored there; actual downloads are still executed inside the original page's `content.js`.
