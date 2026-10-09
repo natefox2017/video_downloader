@@ -60,3 +60,16 @@ test("logo SVG has a flat blue circle and exactly one white arrow shape", () => 
     assert.equal(png.readUInt32BE(20), size);
   }
 });
+
+test("browser layout scrolls naturally and sidebar becomes top navigation on narrow screens", () => {
+  const css = read("options.css");
+  assert.match(css, /width:\s*min\(100%,\s*1220px\)/);
+  assert.match(css, /grid-template-columns:\s*218px minmax\(0, 1fr\)/);
+  assert.doesNotMatch(css, /height:\s*100vh/);
+  assert.match(css, /@media\s*\(max-width:\s*720px\)/);
+  assert.match(css, /\.app-layout\s*\{\s*display:\s*block;\s*padding:/);
+  assert.match(css, /\.app-sidebar\s*\{\s*position:\s*static;/);
+  assert.match(css, /\.app-main\s*\{\s*padding:\s*0;/);
+  // Descriptions should remain below selects rather than overlap them.
+  assert.match(css, /\.settings-field \.field-help\s*\{[^}]*margin:\s*10px 0 0;/s);
+});
