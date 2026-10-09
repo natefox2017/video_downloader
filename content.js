@@ -545,6 +545,7 @@
   let host = null;
   let panelFrame = null;
   let activePreviewShareUrl = "";
+  let previewTimeoutId = null;
   const panelState = { collapsed: false, contentHeight: 144, suppressToggleClickUntil: 0 };
 
   function buildPanel() {
@@ -995,6 +996,7 @@
     const video = shadow?.querySelector("#vd-preview-video");
     const message = shadow?.querySelector("#vd-preview-message");
     if (!video || !message) return;
+    clearTimeout(previewTimeoutId);
     video.pause();
     video.hidden = true;
     message.textContent = text;
@@ -1011,6 +1013,7 @@
     const video = shadow?.querySelector("#vd-preview-video");
     if (!overlay || overlay.hidden || !video) return;
     overlay.hidden = true;
+    clearTimeout(previewTimeoutId);
     video.pause();
     video.removeAttribute("src");
     video.removeAttribute("poster");
@@ -1050,12 +1053,17 @@
       showPreviewMessage("该视频没有可用的预览地址。");
       return;
     }
-    if (isPlaylistUrl(source) && !video.canPlayType("application/vnd.apple.mpegurl")) {
+    if (item.isHls && !video.canPlayType("application/vnd.apple.mpegurl")) {
       showPreviewMessage("浏览器暂不支持直接预览此 HLS (m3u8) 视频流，请下载后播放。");
       return;
     }
+    video.preload = "metadata";
     video.src = source;
     video.load();
+    clearTimeout(previewTimeoutId);
+    previewTimeoutId = setTimeout(() => {
+      if (!overlay.hidden && video.readyState < 2) showPreviewMessage("预览加载超时。视频已经验证，可尝试下载后播放。");
+    }, 12_000);
     video.play().catch(() => {});
   }
 
@@ -1070,6 +1078,7 @@
     const video = shadow.querySelector("#vd-preview-video");
     shadow.querySelector("#vd-preview-backdrop").addEventListener("click", closeVideoPreview);
     close.addEventListener("click", closeVideoPreview);
+    video.addEventListener("loadeddata", () => clearTimeout(previewTimeoutId));
     video.addEventListener("error", () => {
       if (!overlay.hidden && !video.hidden) {
         showPreviewMessage("视频源无法播放，可能已失效、格式不受支持或网站限制直接播放。");
@@ -1188,7 +1197,7 @@
 
   function pushMediaList() {
     const items = buildPanelItems();
-    sendToPanel({ type: "media_list", items });
+    sendToPanel({ type: "media_list", items, validating: mediaList.some((item) => item.verificationState === "pending") });
     publishRegistry(items);
   }
 
@@ -1210,7 +1219,7 @@
 
     switch (data.type) {
       case "panel_ready":
-        sendToPanel({ type: "media_list", items: buildPanelItems() });
+        sendToPanel({ type: "media_list", items: buildPanelItems(), validating: mediaList.some((item) => item.verificationState === "pending") });
         break;
       case "panel_resize":
         if (Number.isFinite(data.height) && data.height > 0) {
@@ -1341,9 +1350,10 @@
    * @param {string} url Direct media URL.
    * @param {Function|null} onProgress Progress callback (0..99 until saved).
    * @param {number} timeoutMs Max inactivity between chunks.
+   * @param {"video"|"auxiliary"} expectedKind Whether to require video bytes.
    * @returns {Promise<Blob>} Verified downloaded media data.
    */
-  async function fetchWithProgress(url, onProgress, timeoutMs = DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS) {
+  async function fetchWithProgress(url, onProgress, timeoutMs = DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS, expectedKind = "video") {
     const controller = new AbortController();
     activeDownloadControllers.add(controller);
     let timeoutId;
@@ -1361,7 +1371,10 @@
       const response = await fetch(url, { credentials: "omit", signal: controller.signal });
       if (!response.ok) throw new Error("HTTP " + response.status);
       const mime = response.headers.get("content-type") || "";
-      if (isRejectedMediaMimeType(mime)) throw new Error("服务器返回非视频内容：" + mime);
+      if (expectedKind === "video" && isRejectedMediaMimeType(mime)) throw new Error("服务器返回非视频内容：" + mime);
+      if (expectedKind !== "video" && /^(text\/|application\/(json|xml|xhtml))/i.test(mime)) {
+        throw new Error("服务器没有返回可下载媒体");
+      }
 
       const total = Number(response.headers.get("content-length")) || 0;
       if (!response.body) throw new Error("视频响应没有可读取的数据流");
@@ -1377,9 +1390,11 @@
           renewIdleTimer();
           if (firstChunk) {
             firstChunk = false;
-            const signature = sniffVideoSignature(value);
-            if (signature === "invalid" || (signature !== "video" && !isVideoMimeType(mime))) {
-              throw new Error("响应内容不是有效视频");
+            if (expectedKind === "video") {
+              const signature = sniffVideoSignature(value);
+              if (signature === "invalid" || (signature !== "video" && !isVideoMimeType(mime))) {
+                throw new Error("响应内容不是有效视频");
+              }
             }
           }
           chunks.push(value);
@@ -1709,7 +1724,7 @@
           const blob = await fetchWithProgress(media.imageUrls[index], (percent) => {
             const overall = Math.floor(((index + percent / 100) / media.imageUrls.length) * 100);
             reportItemStatus(media, "downloading", overall);
-          });
+          }, DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS, "auxiliary");
           const ext = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
           saveBlob(blob, `${media.fileName}_${index + 1}.${ext}`);
         }
@@ -1723,7 +1738,7 @@
       });
       reportItemStatus(media, "finalizing", 99);
       const ext = guessMediaExt(downloadedUrl) || "mp4";
-      const saveExt = ext === "m3u8" ? "mp4" : ext;
+      const saveExt = ext === "m3u8" || ext === "m4s" ? "mp4" : ext;
       saveBlob(videoBlob, `${media.fileName}.${saveExt}`);
 
       // ---- 音轨检测（仅提示用） ----
@@ -1731,7 +1746,7 @@
         if (!hasAudioTrack(await videoBlob.slice(0, AUDIO_PROBE_BYTES).arrayBuffer())) {
           console.warn("[视频下载] 当前视频源未检测到音轨");
           if (media.audioUrl) {
-            const audioBlob = await fetchWithProgress(media.audioUrl, null);
+            const audioBlob = await fetchWithProgress(media.audioUrl, null, DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS, "auxiliary");
             const isM4a = /mp4|m4a|aac/i.test(audioBlob.type || "");
             saveBlob(audioBlob, `${media.fileName}_配乐.${isM4a ? "m4a" : "mp3"}`);
             sendToPanel({ type: "toast", message: "该视频源不含音轨，已同时保存配乐文件" });
