@@ -14,9 +14,8 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
 - **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
 - **Extension icon badge**: shows the number of detected videos on the current tab in real time
-- **Modern panel UI**: card-style list, platform filter chips, live search, sort by newest/largest, video preview modal with frosted-glass backdrop
-- **Per-card actions**: hover to quick-download a single video, or copy its direct link with one click
-- **Batch downloads**: select all / invert / pick individually, adaptive concurrent workers, already-downloaded items skipped
+- **Compact panel UI**: dense rows show only the title, platform, file size, and download state; short lists keep the floating panel small
+- **Batch downloads**: select all / pick individually, adaptive concurrent workers, already-downloaded items skipped
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
 - **Zero build step**: vanilla JS, no frameworks, no dependencies, no bundler
@@ -51,19 +50,17 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 1. Open any supported video site and **play** a video (played videos are the ones that get recorded)
 2. The extension icon shows a badge with the detected video count
 3. Click the icon → floating panel appears in the top-right corner
-4. Hover a card to preview, quick-download, or copy its link
-5. Check items → click **Download selected**
+4. Check the rows you want (newly detected videos are selected automatically)
+5. Click **Download selected**
 6. Files land in your browser's default download directory
 
 ### Panel guide
 
 | Area | What it does |
 |---|---|
-| Search box | Live filter by title / author |
-| Platform chips | Filter by platform (only shown when 2+ platforms detected) |
-| Sort button | Toggle newest-first / largest-first |
-| Card hover | Play button (preview) · copy-link button · quick-download button |
-| Bottom bar | Download selected / stop; shows count and total size |
+| Header | Select all available rows and see the current selection / download progress |
+| Result row | Click to select; shows only title, platform, size, and current download state |
+| Bottom bar | Download selected items or stop the active batch |
 
 ## Supported platforms
 

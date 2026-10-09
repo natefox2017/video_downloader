@@ -268,23 +268,21 @@
     shadow.innerHTML = `
       <style>
         .vd-panel {
-          --vd-width: 360px;
-          --vd-max-height: 68vh;
+          --vd-width: 340px;
+          --vd-max-height: 60vh;
           position: fixed;
           top: 16px;
           right: 16px;
           width: var(--vd-width);
           display: flex;
           flex-direction: column;
-          background: rgba(255, 255, 255, 0.72);
-          -webkit-backdrop-filter: blur(24px) saturate(180%);
-          backdrop-filter: blur(24px) saturate(180%);
-          border-radius: 16px;
-          border: 1px solid rgba(255, 255, 255, 0.6);
-          box-shadow: 0 14px 40px rgba(0, 0, 0, .22);
+          background: #ffffff;
+          border: 1px solid rgba(15, 23, 42, .12);
+          border-radius: 12px;
+          box-shadow: 0 12px 32px rgba(15, 23, 42, .18);
           overflow: hidden;
           font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-          color: #1f2329;
+          color: #111827;
         }
         .vd-panel__bar {
           flex: 0 0 36px;
@@ -293,8 +291,8 @@
           align-items: center;
           justify-content: space-between;
           padding: 0 6px 0 12px;
-          background: rgba(255, 255, 255, 0.4);
-          border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+          background: #ffffff;
+          border-bottom: 1px solid #e5e7eb;
           cursor: move;
           user-select: none;
         }
@@ -302,30 +300,26 @@
           display: flex;
           align-items: center;
           gap: 6px;
+          min-width: 0;
           font-size: 12px;
           font-weight: 600;
-          letter-spacing: .2px;
-        }
-        .vd-panel__plat {
-          font-weight: 400;
-          font-size: 11px;
-          color: #fff;
-          background: #7c3aed;
-          border-radius: 4px;
-          padding: 1px 6px;
         }
         .vd-panel__count {
           font-weight: 400;
-          color: #8a8f99;
+          color: #9ca3af;
         }
-        .vd-panel__actions { display: flex; align-items: center; gap: 2px; }
+        .vd-panel__actions {
+          display: flex;
+          align-items: center;
+          gap: 2px;
+        }
         .vd-panel__btn {
           width: 24px;
           height: 24px;
           border: 0;
           border-radius: 6px;
           background: transparent;
-          color: #646a73;
+          color: #6b7280;
           font-size: 14px;
           line-height: 1;
           cursor: pointer;
@@ -333,20 +327,26 @@
           align-items: center;
           justify-content: center;
         }
-        .vd-panel__btn:hover { background: #f2f3f5; color: #1f2329; }
+        .vd-panel__btn:hover {
+          background: #f3f4f6;
+          color: #111827;
+        }
         .vd-panel__body {
           position: relative;
-          height: 320px;
+          height: 240px;
           max-height: var(--vd-max-height);
           min-height: 0;
+          background: #ffffff;
         }
-        .vd-panel.collapsed .vd-panel__body { display: none; }
+        .vd-panel.collapsed .vd-panel__body {
+          display: none;
+        }
         .vd-panel__frame {
           width: 100%;
           height: 100%;
           border: 0;
           display: block;
-          background: transparent;
+          background: #ffffff;
         }
         .vd-panel__loading {
           position: absolute;
@@ -354,8 +354,8 @@
           display: flex;
           align-items: center;
           justify-content: center;
-          background: #fff;
-          color: #8a8f99;
+          background: #ffffff;
+          color: #9ca3af;
           font-size: 12px;
         }
       </style>
@@ -363,7 +363,6 @@
         <div class="vd-panel__bar" id="vd-bar">
           <span class="vd-panel__title">
             视频下载助手
-            <span class="vd-panel__plat">${escapeHtmlAttr(currentPlatform.name)}</span>
             <span class="vd-panel__count" id="vd-count"></span>
           </span>
           <span class="vd-panel__actions">
@@ -401,15 +400,6 @@
     enableDrag(shadow);
 
     (document.body || document.documentElement).appendChild(host);
-  }
-
-  /** 属性值转义（面板标题里的平台名） */
-  function escapeHtmlAttr(text) {
-    return String(text == null ? "" : text)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   }
 
   function enableDrag(shadow) {
@@ -514,8 +504,8 @@
         // iframe 上报内容高度 → 自适应面板高度（不超过最大高度）
         const body = host?.shadowRoot?.querySelector(".vd-panel__body");
         if (body && typeof data.height === "number" && data.height > 0) {
-          const maxPx = Math.floor(window.innerHeight * 0.68);
-          const h = Math.max(420, Math.min(Math.ceil(data.height), maxPx));
+          const maxPx = Math.floor(window.innerHeight * 0.60);
+          const h = Math.max(220, Math.min(Math.ceil(data.height), maxPx));
           body.style.height = h + "px";
         }
         break;

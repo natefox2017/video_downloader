@@ -6,73 +6,40 @@
   <link rel="stylesheet" href="panel.css" />
 </head>
 <body>
-  <!-- 搜索栏 -->
   <header class="topbar">
-    <div class="search">
-      <svg class="search__icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
-        <circle cx="7" cy="7" r="5" /><line x1="11" y1="11" x2="14.5" y2="14.5" stroke-linecap="round" />
-      </svg>
-      <input id="search" type="text" placeholder="搜索标题 / 作者" autocomplete="off" />
-      <button id="search-clear" class="search__clear" title="清空">✕</button>
-    </div>
-  </header>
-
-  <!-- 工具栏 -->
-  <div class="toolbar">
     <label class="check">
       <input type="checkbox" id="select-all" />
-      <span class="check__box"><svg viewBox="0 0 12 12" width="10" height="10"><path d="M2 6.5 4.8 9 10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      <span class="check__label">全选</span>
+      <span class="check__box">
+        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+          <path d="M2 6.5 4.8 9 10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span>全选</span>
     </label>
-    <button type="button" class="chip" id="invert">反选</button>
-    <span class="toolbar__count" id="count"></span>
-    <button type="button" class="chip chip--sort" id="sort" title="切换排序">🕐 最新</button>
-  </div>
+    <span class="topbar__count" id="count"></span>
+  </header>
 
-  <!-- 平台筛选 -->
-  <div class="filters" id="filters"></div>
-
-  <!-- 视频列表 -->
   <ul class="list" id="list"></ul>
 
-  <!-- 空状态 -->
   <div class="empty" id="empty">
-    <svg class="empty__art" viewBox="0 0 120 90" width="120" height="90" fill="none">
-      <rect x="28" y="14" width="64" height="44" rx="8" fill="#eef2ff" />
-      <path d="M54 28v16l13-8z" fill="#6366f1" />
-      <rect x="20" y="62" width="80" height="6" rx="3" fill="#e5e7eb" />
-      <rect x="36" y="72" width="48" height="6" rx="3" fill="#e5e7eb" />
-      <circle cx="96" cy="24" r="10" fill="#eef2ff" />
-      <path d="M93 24v6l5-3z" fill="#a5b4fc" />
+    <svg class="empty__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+      <rect x="3.5" y="5" width="17" height="14" rx="3" />
+      <path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" />
     </svg>
     <p class="empty__title">还没有识别到视频</p>
-    <p class="empty__desc">在页面里播放一个视频，这里会自动出现</p>
+    <p class="empty__desc">在页面播放视频后会自动出现</p>
   </div>
 
-  <!-- 底部操作栏 -->
   <footer class="actionbar">
     <button type="button" class="btn-primary" id="download" disabled>
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
         <path d="M8 2v8m0 0 3.5-3.5M8 10 4.5 6.5M2.5 13.5h11" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <span id="download-label">下载选中</span>
     </button>
   </footer>
 
-  <!-- 轻提示 -->
   <div class="toast" id="toast"></div>
-
-  <!-- 视频预览弹框 -->
-  <div class="preview" id="preview">
-    <div class="preview__backdrop" id="preview-backdrop"></div>
-    <div class="preview__dialog">
-      <div class="preview__head">
-        <span class="preview__title" id="preview-title"></span>
-        <button class="preview__close" id="preview-close" title="关闭">✕</button>
-      </div>
-      <video class="preview__video" id="preview-video" controls playsinline></video>
-    </div>
-  </div>
 
   <script src="panel.js"></script>
 </body>
