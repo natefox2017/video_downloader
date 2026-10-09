@@ -184,83 +184,17 @@
   let activeMediaProbes = 0;
 
   /**
-   * Read a bounded prefix even when a CDN ignores Range and responds with
-   * HTTP 200 for the entire file. Never call response.blob() for a probe.
-   * @param {Response} response Partial (or full) HTTP response.
-   * @param {number} limit Maximum bytes to retain.
-   * @returns {Promise<Uint8Array>} Leading payload bytes.
-   */
-  async function readProbeBytes(response, limit) {
-    if (!response.body) return new Uint8Array();
-    const reader = response.body.getReader();
-    const chunks = [];
-    let length = 0;
-    try {
-      while (length < limit) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = value.subarray(0, limit - length);
-        chunks.push(chunk);
-        length += chunk.length;
-      }
-    } finally {
-      reader.cancel().catch(() => {}); // Reject the rest of an ignored Range response.
-    }
-    const result = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return result;
-  }
-
-  /**
-   * Fetch at most 16 KiB to confirm actual video bytes/MIME or a video HLS
-   * manifest. A missing/incorrect Content-Type must be backed by a signature.
-   * @param {string} url Candidate HTTP(S) source.
-   * @returns {Promise<object|null>} Validated source metadata or null.
+   * Keep privileged cross-origin validation in the extension service worker.
+   * Chrome MV3 content-script fetch() remains subject to the page's CORS rules.
+   * @param {string} url Candidate media URL.
+   * @returns {Promise<object|null>} Verified media metadata.
    */
   async function probeMediaUrl(url) {
-    const source = safePreviewUrl(url);
-    if (!source || shouldIgnoreUrl(source)) return null;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DOWNLOAD_RULES.MEDIA_PROBE_TIMEOUT_MS);
     try {
-      const response = await fetch(source, {
-        credentials: "omit",
-        headers: { Range: "bytes=0-" + (DOWNLOAD_RULES.MEDIA_PROBE_MAX_BYTES - 1) },
-        signal: controller.signal,
-      });
-      if (!response.ok) return null;
-      const mime = response.headers.get("content-type") || "";
-      const playlist = isPlaylistUrl(source) || /mpegurl/i.test(mime);
-      if (!playlist && isRejectedMediaMimeType(mime)) return null;
-
-      const bytes = await readProbeBytes(response, DOWNLOAD_RULES.MEDIA_PROBE_MAX_BYTES);
-      if (!bytes.length) return null;
-      if (playlist) {
-        const text = new TextDecoder().decode(bytes);
-        if (!isHlsVideoPlaylist(text)) return null;
-      } else {
-        const signature = sniffVideoSignature(bytes);
-        if (signature === "invalid") return null;
-        if (signature !== "video" && !isVideoMimeType(mime)) return null;
-      }
-
-      const rangeTotal = Number((response.headers.get("content-range") || "").match(/\/(\d+)$/)?.[1] || 0);
-      const contentLength = Number(response.headers.get("content-length")) || 0;
-      return {
-        url: source,
-        size: rangeTotal || (response.status === 200 && !playlist ? contentLength : 0),
-        kind: playlist ? "hls" : "video",
-      };
+      const response = await chrome.runtime.sendMessage({ type: "probe_media_url", url });
+      return response?.ok ? response.media : null;
     } catch (error) {
-      // A temporary failure remains invisible rather than being listed as a video.
       return null;
-    } finally {
-      clearTimeout(timer);
-      controller.abort();
     }
   }
 
