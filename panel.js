@@ -20,8 +20,7 @@
   const downloadEl = document.getElementById("download");
   const downloadLabel = document.getElementById("download-label");
   const toastEl = document.getElementById("toast");
-  const previewEl = document.getElementById("preview");
-  const previewVideo = document.getElementById("preview-video");
+  let lastPreviewShareUrl = "";
 
   function escapeHtml(text) {
     return String(text == null ? "" : text)
@@ -207,23 +206,16 @@
     render();
   }
 
-  function closePreview() {
-    previewVideo.pause();
-    previewVideo.removeAttribute("src");
-    previewVideo.load();
-    previewEl.classList.remove("is-open");
-    previewEl.setAttribute("aria-hidden", "true");
-  }
-
+  /**
+   * Ask the content script to open a page-level preview. The iframe must not
+   * render its own modal because its viewport is only as large as the panel.
+   * @param {object} item Media descriptor from the content script.
+   * @returns {void}
+   */
   function openPreview(item) {
-    if (!item?.previewUrl) {
-      toast("这个视频暂时不能预览");
-      return;
-    }
-    previewVideo.src = item.previewUrl;
-    previewEl.classList.add("is-open");
-    previewEl.setAttribute("aria-hidden", "false");
-    previewVideo.play().catch(() => {});
+    if (!item) return;
+    lastPreviewShareUrl = item.shareUrl;
+    post({ type: "open_preview", shareUrl: item.shareUrl });
   }
 
   listEl.addEventListener("click", (event) => {
@@ -248,17 +240,6 @@
     if (!row) return;
     event.stopPropagation();
     toggleOne(row.dataset.url, event.target.checked);
-  });
-
-  document.getElementById("preview-close").addEventListener("click", closePreview);
-  document.getElementById("preview-backdrop").addEventListener("click", closePreview);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && previewEl.classList.contains("is-open")) closePreview();
-  });
-  previewVideo.addEventListener("error", () => {
-    if (!previewEl.classList.contains("is-open")) return;
-    closePreview();
-    toast("这个视频暂时不能预览");
   });
 
   downloadEl.addEventListener("click", () => {
@@ -331,6 +312,17 @@
         render();
         toast(finishText(message));
         break;
+
+      case "preview_closed": {
+        if (lastPreviewShareUrl) {
+          const button = [...listEl.querySelectorAll("[data-preview]")].find((node) =>
+            node.closest(".row")?.dataset.url === lastPreviewShareUrl
+          );
+          button?.focus();
+          lastPreviewShareUrl = "";
+        }
+        break;
+      }
 
       case "item_error":
         toast(message.message ? `下载失败：${message.message}` : "下载失败");

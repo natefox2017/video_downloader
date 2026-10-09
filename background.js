@@ -94,7 +94,7 @@ async function setBadge(tabId, count) {
   }
 }
 
-async function dispatchMultiTabDownload(items) {
+async function dispatchMultiTabDownload(items, concurrency) {
   const grouped = new Map();
   for (const item of Array.isArray(items) ? items : []) {
     const tabId = Number(item?.tabId);
@@ -111,6 +111,7 @@ async function dispatchMultiTabDownload(items) {
       const response = await chrome.tabs.sendMessage(tabId, {
         type: "start_external_download",
         shareUrls: [...shareUrls],
+        concurrency,
       });
       if (!response?.ok) continue;
       tabsStarted += 1;
@@ -156,7 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "start_multi_tab_download") {
-    dispatchMultiTabDownload(message.items).then((result) => sendResponse({ ok: true, ...result })).catch((error) => {
+    dispatchMultiTabDownload(message.items, message.concurrency).then((result) => sendResponse({ ok: true, ...result })).catch((error) => {
       sendResponse({ ok: false, error: error.message || String(error) });
     });
     return true;

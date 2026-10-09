@@ -75,11 +75,11 @@ Three ingestion paths merged into one registry:
 2. **DOM scan** — `<video>` elements
 3. **Resource sniffing** — `PerformanceObserver` on resource entries
 
-Plus: floating panel host (Shadow DOM + iframe), download scheduler, concurrency control.
+Plus: floating panel host (Shadow DOM + iframe), independently layered video-preview dialog (sibling in the same shadow root), download scheduler, concurrency control.
 
 ### panel.* — UI (iframe)
 
-Pure presentation. Talks to `content.js` via `postMessage` (cross-origin). Never touches the page directly.
+Pure presentation. Talks to `content.js` via `postMessage` (cross-origin). Never touches the page directly. Its iframe only contains the media list and download action; the preview video element is rendered by `content.js` as a viewport-fixed sibling of the panel, outside the panel's `contain: paint` boundary.
 
 ## Message protocol
 
@@ -94,7 +94,10 @@ Pure presentation. Talks to `content.js` via `postMessage` (cross-origin). Never
 | content → panel | `batch_progress` | `{ completed, total }` |
 | content → panel | `batch_finished` | `{ completed, succeeded, failed, total, stopped }` |
 | content → panel | `toast` | `{ message }` |
+| content → panel | `preview_closed` | `{ shareUrl }` (restore focus to thumbnail) |
 | panel → content | `panel_ready` | — |
+| panel → content | `panel_resize` | `{ height }` measured row heights + action bar; parent caps at 480px and remaining viewport height |
+| panel → content | `open_preview` | `{ shareUrl }` (open independent shadow-root video dialog) |
 | panel → content | `start_download` | `{ shareUrls[] }` |
 | panel → content | `stop_download` | — |
 
@@ -108,6 +111,10 @@ Same-window `window.postMessage`, distinguished by `source` field:
 ### content.js → background.js
 
 - `chrome.runtime.sendMessage({ type: "update_badge", count })`
+- `chrome.runtime.sendMessage({ type: "update_media_registry", pageUrl, pageTitle, platform, items })` — title, cover, preview URL, quality, status, progress and the per-tab media key only
+- `chrome.runtime.sendMessage({ type: "get_media_registry" })` — monitor reads the latest per-tab snapshot
+- `chrome.runtime.sendMessage({ type: "start_multi_tab_download", items: [{tabId, shareUrl}], concurrency })` — background groups requests by tab and forwards `start_external_download` with its per-tab worker cap
+- Progress updates are coalesced into approximately one registry update every 900ms per active tab to avoid excessive session writes.
 
 ## Download engine
 
@@ -115,11 +122,11 @@ Same-window `window.postMessage`, distinguished by `source` field:
 
 Adaptive worker pool, not hardcoded:
 
-1. **Estimate**: `memory budget × 70% ÷ avg video size`, clamped to 2–16
+1. **Estimate**: `memory budget × 70% ÷ avg video size`, clamped to 2–16, then capped by the saved per-tab preference (2/4/6/8; 4 by default; automatic disables the manual cap)
    - Budget source priority: `performance.memory.jsHeapSizeLimit` → `navigator.deviceMemory / 2` → fallback constant
 2. **Live guard**: workers check heap before taking tasks; pause above 85%, resume below 60%
 
-Workers start staggered (40ms apart). Shared cursor distributes tasks. m3u8 segments use a separate 6-worker pool.
+Workers start staggered (40ms apart). Shared cursor distributes tasks within each tab. Multiple tabs may download concurrently and each has an independent worker cap, not a global limit. m3u8 segments use a separate 6-worker pool.
 
 ### m3u8
 

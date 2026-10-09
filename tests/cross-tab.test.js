@@ -113,6 +113,7 @@ test("batch downloads preserve per-tab media identities and count successful ack
   env.rejectedTabs.add(202);
   const result = await env.request({
     type: "start_multi_tab_download",
+    concurrency: 4,
     items: [
       { tabId: 101, shareUrl: "video:a" },
       { tabId: 101, shareUrl: "video:a" },
@@ -129,6 +130,8 @@ test("batch downloads preserve per-tab media identities and count successful ack
     [101, 202]
   );
   assert.deepEqual(Array.from(env.dispatched[0].message.shareUrls), ["video:a", "video:b"]);
+  assert.equal(env.dispatched[0].message.concurrency, 4);
+  assert.equal(env.dispatched[1].message.concurrency, 4);
 });
 
 test("monitor has an independent document and settings no longer renders the media registry", () => {
@@ -138,4 +141,25 @@ test("monitor has an independent document and settings no longer renders the med
   assert.match(monitor, /id="registry"/);
   assert.match(options, /href="monitor\.html"/);
   assert.doesNotMatch(options, /id="registry"/);
+});
+
+test("registry and monitor forward preview metadata without mixing tab identities", () => {
+  const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
+  const monitor = fs.readFileSync(path.join(root, "monitor.js"), "utf8");
+  assert.match(content, /cover: item\.cover,/);
+  assert.match(content, /previewUrl: item\.previewUrl,/);
+  assert.match(content, /progress: item\.progress,/);
+  assert.match(content, /scheduleRegistryProgress\(\)/);
+  assert.match(monitor, /function videoKey\(tabId, shareUrl\)/);
+  assert.match(monitor, /function openPreview\(tabId, shareUrl\)/);
+  assert.match(monitor, /new Set\(items\.map\(\(item\) => item\.tabId\)\)/);
+});
+
+test("settings and downloader use the same bounded concurrency preference", () => {
+  const settings = fs.readFileSync(path.join(root, "rules.js"), "utf8");
+  const downloader = fs.readFileSync(path.join(root, "content.js"), "utf8");
+  assert.match(settings, /batchConcurrency:\s*4/);
+  assert.match(downloader, /function resolveConcurrency\(targets, requestedConcurrency\)/);
+  assert.match(downloader, /threads: Math\.min\(manualLimit,/);
+  assert.match(downloader, /startBatchDownload\(available, message\.concurrency\)/);
 });

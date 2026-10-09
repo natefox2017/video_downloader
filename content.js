@@ -387,7 +387,8 @@
 
   let host = null;
   let panelFrame = null;
-  const panelState = { collapsed: false };
+  let activePreviewShareUrl = "";
+  const panelState = { collapsed: false, contentHeight: 144, suppressToggleClickUntil: 0 };
 
   function buildPanel() {
     if (host) return;
@@ -401,12 +402,13 @@
       <style>
         .vd-panel {
           --vd-width: 320px;
-          --vd-max-height: 55vh;
+          --vd-max-height: 480px;
           position: fixed;
           top: 16px;
           right: 16px;
           width: var(--vd-width);
           max-width: calc(100vw - 24px);
+          max-height: calc(100dvh - 24px);
           box-sizing: border-box;
           contain: layout paint;
           display: flex;
@@ -428,7 +430,8 @@
           padding: 0 6px 0 12px;
           background: #ffffff;
           border-bottom: 1px solid #e5e7eb;
-          cursor: move;
+          cursor: grab;
+          touch-action: none;
           user-select: none;
         }
         .vd-panel__title {
@@ -469,23 +472,29 @@
         }
         .vd-panel__body {
           position: relative;
-          height: 140px;
-          max-height: var(--vd-max-height);
+          flex: 0 1 auto;
+          height: 96px;
+          max-height: min(var(--vd-max-height), calc(100dvh - 68px));
           min-height: 0;
+          overflow: hidden;
           background: #ffffff;
         }
         .vd-panel.collapsed {
-          width: 44px;
-          height: 44px;
+          width: 52px;
+          height: 52px;
           border-radius: 50%;
+          border-color: rgba(79, 70, 229, .18);
+          background: #fff;
+          box-shadow: 0 6px 22px rgba(15, 23, 42, .22), 0 2px 8px rgba(79, 70, 229, .14);
         }
         .vd-panel.collapsed .vd-panel__bar {
-          width: 44px;
-          height: 44px;
-          flex-basis: 44px;
+          width: 100%;
+          height: 100%;
+          flex: 1 0 auto;
           padding: 0;
           border: 0;
           justify-content: center;
+          cursor: grab;
         }
         .vd-panel.collapsed .vd-panel__title,
         .vd-panel.collapsed #vd-settings,
@@ -501,8 +510,17 @@
           width: 100%;
           height: 100%;
           border-radius: 50%;
-          color: #2563eb;
+          background: #fff;
+          color: #4f46e5;
+          cursor: grab;
         }
+        .vd-panel.collapsed #vd-collapse:hover {
+          background: #f5f3ff;
+          color: #4338ca;
+        }
+        .vd-panel.is-dragging .vd-panel__bar,
+        .vd-panel.is-dragging #vd-collapse { cursor: grabbing; }
+        #vd-collapse:focus-visible { outline: 3px solid rgba(79, 70, 229, .35); outline-offset: -3px; }
         #vd-collapse .vd-collapse__download { display: none; }
         .vd-panel.collapsed #vd-collapse .vd-collapse__minus { display: none; }
         .vd-panel.collapsed #vd-collapse .vd-collapse__download { display: block; }
@@ -523,6 +541,109 @@
           color: #9ca3af;
           font-size: 12px;
         }
+        /* The preview is a sibling of .vd-panel, never inside its iframe
+           or its contain: paint boundary. It uses the viewport directly. */
+        .vd-preview {
+          position: fixed;
+          inset: 0;
+          z-index: 2;
+          width: 100vw;
+          height: 100dvh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-sizing: border-box;
+          padding: 16px;
+          font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        .vd-preview[hidden] { display: none; }
+        .vd-preview__backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(15, 23, 42, .7);
+          backdrop-filter: blur(3px);
+        }
+        .vd-preview__dialog {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          width: min(840px, calc(100vw - 32px));
+          max-height: calc(100dvh - 32px);
+          box-sizing: border-box;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, .1);
+          border-radius: 14px;
+          background: #fff;
+          box-shadow: 0 24px 80px rgba(0, 0, 0, .32);
+        }
+        .vd-preview__header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 12px 16px;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        .vd-preview__title {
+          min-width: 0;
+          margin: 0;
+          overflow: hidden;
+          color: #111827;
+          font-size: 14px;
+          font-weight: 600;
+          line-height: 1.5;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .vd-preview__close {
+          display: grid;
+          flex: 0 0 32px;
+          place-items: center;
+          width: 32px;
+          height: 32px;
+          padding: 0;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          background: #fff;
+          color: #475569;
+          font-size: 22px;
+          line-height: 1;
+          cursor: pointer;
+        }
+        .vd-preview__close:hover { background: #f8fafc; color: #0f172a; }
+        .vd-preview__close:focus-visible { outline: 3px solid #c7d2fe; }
+        .vd-preview__stage {
+          display: flex;
+          min-height: 120px;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          background: #0b1020;
+        }
+        .vd-preview__video {
+          display: block;
+          width: 100%;
+          height: min(62dvh, 540px);
+          max-height: calc(100dvh - 145px);
+          object-fit: contain;
+          background: #0b1020;
+        }
+        .vd-preview__video[hidden], .vd-preview__message[hidden] { display: none; }
+        .vd-preview__message {
+          margin: 0;
+          padding: 36px 24px;
+          color: #e2e8f0;
+          font-size: 13px;
+          line-height: 1.7;
+          text-align: center;
+        }
+        .vd-preview__note {
+          margin: 0;
+          padding: 11px 16px 14px;
+          color: #94a3b8;
+          font-size: 11px;
+          line-height: 1.6;
+        }
       </style>
       <div class="vd-panel" id="vd-panel">
         <div class="vd-panel__bar" id="vd-bar">
@@ -542,6 +663,22 @@
           <div class="vd-panel__loading" id="vd-loading">正在加载…</div>
         </div>
       </div>
+      <div class="vd-preview" id="vd-preview" role="dialog" aria-modal="true"
+        aria-labelledby="vd-preview-title" hidden>
+        <div class="vd-preview__backdrop" id="vd-preview-backdrop"></div>
+        <section class="vd-preview__dialog" aria-label="视频预览播放器">
+          <header class="vd-preview__header">
+            <h2 class="vd-preview__title" id="vd-preview-title">视频预览</h2>
+            <button class="vd-preview__close" id="vd-preview-close" type="button" aria-label="关闭预览">×</button>
+          </header>
+          <div class="vd-preview__stage">
+            <video class="vd-preview__video" id="vd-preview-video" controls
+              playsinline preload="metadata" tabindex="0"></video>
+            <p class="vd-preview__message" id="vd-preview-message" hidden></p>
+          </div>
+          <p class="vd-preview__note">视频预览使用网站提供的播放地址，部分加密流或限制外链的视频可能无法播放。</p>
+        </section>
+      </div>
     `;
 
     const body = shadow.querySelector(".vd-panel__body");
@@ -556,10 +693,20 @@
     });
     body.appendChild(panelFrame);
 
-    shadow.querySelector("#vd-collapse").addEventListener("click", () => {
+    shadow.querySelector("#vd-collapse").addEventListener("click", (event) => {
+      // A drag ends in a synthesized click on some pointer devices.
+      if (event.detail !== 0 && Date.now() < panelState.suppressToggleClickUntil) {
+        event.preventDefault();
+        return;
+      }
       const panel = shadow.querySelector("#vd-panel");
+      const before = panel.getBoundingClientRect();
       panelState.collapsed = !panelState.collapsed;
       panel.classList.toggle("collapsed", panelState.collapsed);
+      // Keep the right edge stationary, so expanding near the viewport edge
+      // opens toward the available space instead of going off-screen.
+      clampPanelPosition(panel, before.right - panel.offsetWidth, before.top);
+      if (!panelState.collapsed) updatePanelHeight(shadow);
     });
 
     shadow.querySelector("#vd-settings").addEventListener("click", () => {
@@ -568,49 +715,226 @@
     shadow.querySelector("#vd-close").addEventListener("click", () => hidePanel());
 
     enableDrag(shadow);
+    enableVideoPreview(shadow);
+    window.addEventListener("resize", () => {
+      if (host?.style.display !== "none") updatePanelHeight(shadow);
+    });
 
     (document.body || document.documentElement).appendChild(host);
     restorePanelPosition(shadow).catch(() => {});
   }
 
+  /**
+   * Keep the floating panel fully on screen after dragging, resizing or expanding.
+   * @param {HTMLElement} panel Floating shadow DOM panel.
+   * @param {number} [x] Preferred left viewport coordinate.
+   * @param {number} [y] Preferred top viewport coordinate.
+   * @returns {void}
+   */
+  function clampPanelPosition(panel, x, y) {
+    const rect = panel.getBoundingClientRect();
+    const margin = 12;
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - height - margin);
+    const left = Number.isFinite(x) ? x : rect.left;
+    const top = Number.isFinite(y) ? y : rect.top;
+    panel.style.right = "auto";
+    panel.style.left = Math.max(margin, Math.min(left, maxLeft)) + "px";
+    panel.style.top = Math.max(margin, Math.min(top, maxTop)) + "px";
+  }
+
+  /**
+   * Size the iframe to its measured content before enabling scrolling.
+   * A compact two-row list should not inherit a fixed 55vh cap.
+   * @param {ShadowRoot} shadow Floating panel shadow root.
+   * @returns {void}
+   */
+  function updatePanelHeight(shadow) {
+    const body = shadow.querySelector(".vd-panel__body");
+    const panel = shadow.querySelector("#vd-panel");
+    if (!body || !panel) return;
+    const maxBody = Math.max(72, Math.min(480, window.innerHeight - 68));
+    body.style.height = Math.min(Math.max(72, Math.ceil(panelState.contentHeight)), maxBody) + "px";
+    if (panel.isConnected && host?.style.display !== "none") clampPanelPosition(panel);
+  }
+
+  /**
+   * Support touch, pen and mouse dragging on the title bar and collapsed button.
+   * A movement threshold distinguishes a drag from a click to re-expand the bubble.
+   * @param {ShadowRoot} shadow Floating panel shadow root.
+   * @returns {void}
+   */
   function enableDrag(shadow) {
     const bar = shadow.querySelector("#vd-bar");
     const panel = shadow.querySelector("#vd-panel");
-    let startX = 0;
-    let startY = 0;
-    let originLeft = 0;
-    let originTop = 0;
-    let dragging = false;
+    let gesture = null;
 
-    bar.addEventListener("mousedown", (event) => {
-      if (event.target.closest("button")) return;
-      dragging = true;
+    bar.addEventListener("pointerdown", (event) => {
+      if (!event.isPrimary || event.button !== 0) return;
+      const button = event.target.closest("button");
+      if (button && !panelState.collapsed) return;
       const rect = panel.getBoundingClientRect();
-      startX = event.clientX;
-      startY = event.clientY;
-      originLeft = rect.left;
-      originTop = rect.top;
-      panel.style.right = "auto";
-      panel.style.left = rect.left + "px";
-      panel.style.top = rect.top + "px";
+      gesture = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        moved: false,
+      };
+      // Capture on the actual button when collapsed so tap activation still
+      // targets the button; dragged pointers continue working off the bubble.
+      (button || bar).setPointerCapture(event.pointerId);
+    });
+
+    bar.addEventListener("pointermove", (event) => {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      const dx = event.clientX - gesture.startX;
+      const dy = event.clientY - gesture.startY;
+      if (!gesture.moved && Math.hypot(dx, dy) < 5) return;
+      gesture.moved = true;
+      panel.classList.add("is-dragging");
+      clampPanelPosition(panel, gesture.left + dx, gesture.top + dy);
       event.preventDefault();
     });
 
-    window.addEventListener("mousemove", (event) => {
-      if (!dragging) return;
-      const left = originLeft + (event.clientX - startX);
-      const top = originTop + (event.clientY - startY);
-      const maxLeft = window.innerWidth - 60;
-      const maxTop = window.innerHeight - 40;
-      panel.style.left = Math.max(-panel.offsetWidth + 80, Math.min(left, maxLeft)) + "px";
-      panel.style.top = Math.max(0, Math.min(top, maxTop)) + "px";
-    });
+    function finishDrag(event) {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (gesture.moved) {
+        panelState.suppressToggleClickUntil = Date.now() + 160;
+        savePanelPosition(panel).catch(() => {});
+      }
+      panel.classList.remove("is-dragging");
+      gesture = null;
+    }
 
-    window.addEventListener("mouseup", () => {
-      if (!dragging) return;
-      dragging = false;
-      savePanelPosition(panel).catch(() => {});
+    bar.addEventListener("pointerup", finishDrag);
+    bar.addEventListener("pointercancel", finishDrag);
+  }
+
+  /**
+   * Permit only normal remote media URLs; never insert page-supplied markup.
+   * @param {*} value Media or thumbnail URL.
+   * @returns {string} HTTP(S) URL or an empty string.
+   */
+  function safePreviewUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  /**
+   * Show a clear error in the preview overlay when the source cannot play.
+   * @param {string} text Explanatory error message.
+   * @returns {void}
+   */
+  function showPreviewMessage(text) {
+    const shadow = host?.shadowRoot;
+    const video = shadow?.querySelector("#vd-preview-video");
+    const message = shadow?.querySelector("#vd-preview-message");
+    if (!video || !message) return;
+    video.pause();
+    video.hidden = true;
+    message.textContent = text;
+    message.hidden = false;
+  }
+
+  /**
+   * Remove media references and return keyboard focus to the panel preview button.
+   * @returns {void}
+   */
+  function closeVideoPreview() {
+    const shadow = host?.shadowRoot;
+    const overlay = shadow?.querySelector("#vd-preview");
+    const video = shadow?.querySelector("#vd-preview-video");
+    if (!overlay || overlay.hidden || !video) return;
+    overlay.hidden = true;
+    video.pause();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.load();
+    sendToPanel({ type: "preview_closed", shareUrl: activePreviewShareUrl });
+    activePreviewShareUrl = "";
+  }
+
+  /**
+   * Open a viewport-level dialog rather than constraining playback to the iframe.
+   * @param {string} shareUrl Media identifier reported by the panel.
+   * @returns {void}
+   */
+  function openVideoPreview(shareUrl) {
+    const item = buildPanelItems().find((entry) => entry.shareUrl === shareUrl);
+    if (!item || !host?.shadowRoot) return;
+    const shadow = host.shadowRoot;
+    const overlay = shadow.querySelector("#vd-preview");
+    const video = shadow.querySelector("#vd-preview-video");
+    const message = shadow.querySelector("#vd-preview-message");
+    const close = shadow.querySelector("#vd-preview-close");
+    activePreviewShareUrl = shareUrl;
+    video.pause();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.load();
+    shadow.querySelector("#vd-preview-title").textContent = item.title || "视频预览";
+    const poster = safePreviewUrl(item.cover);
+    if (poster) video.poster = poster;
+    video.hidden = false;
+    message.hidden = true;
+    overlay.hidden = false;
+    close.focus();
+
+    const source = safePreviewUrl(item.previewUrl);
+    if (!source) {
+      showPreviewMessage("该视频没有可用的预览地址。");
+      return;
+    }
+    if (isPlaylistUrl(source) && !video.canPlayType("application/vnd.apple.mpegurl")) {
+      showPreviewMessage("浏览器暂不支持直接预览此 HLS (m3u8) 视频流，请下载后播放。");
+      return;
+    }
+    video.src = source;
+    video.load();
+    video.play().catch(() => {});
+  }
+
+  /**
+   * Set up backdrop, playback errors and keyboard access outside the panel iframe.
+   * @param {ShadowRoot} shadow Host's shadow root.
+   * @returns {void}
+   */
+  function enableVideoPreview(shadow) {
+    const overlay = shadow.querySelector("#vd-preview");
+    const close = shadow.querySelector("#vd-preview-close");
+    const video = shadow.querySelector("#vd-preview-video");
+    shadow.querySelector("#vd-preview-backdrop").addEventListener("click", closeVideoPreview);
+    close.addEventListener("click", closeVideoPreview);
+    video.addEventListener("error", () => {
+      if (!overlay.hidden && !video.hidden) {
+        showPreviewMessage("视频源无法播放，可能已失效、格式不受支持或网站限制直接播放。");
+      }
     });
+    window.addEventListener("keydown", (event) => {
+      if (overlay.hidden) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeVideoPreview();
+      } else if (event.key === "Tab") {
+        const targets = [close, video].filter((node) => !node.hidden);
+        const index = targets.indexOf(shadow.activeElement);
+        if (index === -1 || (!event.shiftKey && index === targets.length - 1)) {
+          event.preventDefault();
+          targets[0].focus();
+        } else if (event.shiftKey && index === 0) {
+          event.preventDefault();
+          targets[targets.length - 1].focus();
+        }
+      }
+    }, true);
   }
 
   async function restorePanelPosition(shadow) {
@@ -619,11 +943,7 @@
     const position = data[PANEL_POSITION_KEY];
     if (!position || typeof position.left !== "number" || typeof position.top !== "number") return;
     const panel = shadow.querySelector("#vd-panel");
-    const maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth);
-    const maxTop = Math.max(0, window.innerHeight - 44);
-    panel.style.right = "auto";
-    panel.style.left = Math.max(0, Math.min(position.left, maxLeft)) + "px";
-    panel.style.top = Math.max(0, Math.min(position.top, maxTop)) + "px";
+    clampPanelPosition(panel, position.left, position.top);
   }
 
   async function savePanelPosition(panel) {
@@ -638,6 +958,7 @@
     buildPanel();
     if (host && !host.isConnected) (document.body || document.documentElement).appendChild(host);
     if (host) host.style.display = "";
+    updatePanelHeight(host.shadowRoot);
     // 打开面板时做一次全量补抓：主世界抓取 + DOM 扫描
     requestCurrentMedia();
     scanDomVideos();
@@ -645,6 +966,7 @@
   }
 
   function hidePanel() {
+    closeVideoPreview();
     if (host) host.style.display = "none";
   }
 
@@ -678,16 +1000,23 @@
     }
   }
 
-  function pushMediaList() {
-    const items = buildPanelItems();
-    sendToPanel({ type: "media_list", items });
+  /**
+   * Publish display-only media metadata to the cross-tab monitor.
+   * Keep this payload separate from the full download candidate list.
+   * @param {Array<Object>} items Normalized panel/media descriptors.
+   * @returns {void}
+   */
+  function publishRegistry(items) {
     const registryItems = items.map((item) => ({
       shareUrl: item.shareUrl,
       title: item.title,
+      cover: item.cover,
+      previewUrl: item.previewUrl,
       size: item.size,
       quality: item.quality,
       platform: item.platform,
       status: item.status,
+      progress: item.progress,
     }));
     chrome.runtime.sendMessage({
       type: "update_media_registry",
@@ -698,30 +1027,46 @@
     }).catch(() => {});
   }
 
+  function pushMediaList() {
+    const items = buildPanelItems();
+    sendToPanel({ type: "media_list", items });
+    publishRegistry(items);
+  }
+
+  // Progress can change every few milliseconds. Coalesce registry writes so
+  // the service worker does not serialize one storage update for every chunk.
+  let registryProgressTimer = null;
+  function scheduleRegistryProgress() {
+    if (registryProgressTimer) return;
+    registryProgressTimer = setTimeout(() => {
+      registryProgressTimer = null;
+      publishRegistry(buildPanelItems());
+    }, 900);
+  }
+
   window.addEventListener("message", (event) => {
     const data = event.data;
     if (!data || typeof data !== "object") return;
-    if (data.source !== "vd-panel") return;
+    if (data.source !== "vd-panel" || event.source !== panelFrame?.contentWindow) return;
 
     switch (data.type) {
       case "panel_ready":
         sendToPanel({ type: "media_list", items: buildPanelItems() });
         break;
-      case "panel_resize": {
-        // iframe 上报内容高度 → 自适应面板高度（不超过最大高度）
-        const body = host?.shadowRoot?.querySelector(".vd-panel__body");
-        if (body && typeof data.height === "number" && data.height > 0) {
-          const maxPx = Math.floor(window.innerHeight * 0.55);
-          const h = Math.max(140, Math.min(Math.ceil(data.height), maxPx));
-          body.style.height = h + "px";
+      case "panel_resize":
+        if (Number.isFinite(data.height) && data.height > 0) {
+          panelState.contentHeight = data.height;
+          if (host?.shadowRoot) updatePanelHeight(host.shadowRoot);
         }
         break;
-      }
       case "start_download":
         startBatchDownload(Array.isArray(data.shareUrls) ? data.shareUrls : []);
         break;
       case "stop_download":
         stopBatchDownload();
+        break;
+      case "open_preview":
+        if (typeof data.shareUrl === "string") openVideoPreview(data.shareUrl);
         break;
       default:
         break;
@@ -763,7 +1108,7 @@
     return { budgetBytes: 0, source: "默认值" };
   }
 
-  function resolveConcurrency(targets) {
+  function resolveConcurrency(targets, requestedConcurrency) {
     const budget = readBrowserMemoryBudget();
     const sizes = targets.map((item) => Number(item.size) || 0).filter((size) => size > 0);
     const perVideo = sizes.length
@@ -773,8 +1118,13 @@
     const usableBytes = budget.budgetBytes * MEMORY_BUDGET_RATIO;
     const raw = usableBytes > 0 ? Math.floor(usableBytes / perVideo) : MIN_CONCURRENCY;
 
+    // The manual limit is per originating tab; memory pressure can reduce it.
+    const setting = requestedConcurrency == null ? extensionSettings.batchConcurrency : requestedConcurrency;
+    const manualLimit = Number(setting) > 0
+      ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(Number(setting))))
+      : MAX_CONCURRENCY;
     return {
-      threads: Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw)),
+      threads: Math.min(manualLimit, Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw))),
       usableBytes: Math.round(usableBytes),
       perVideo,
       sizeSampled: sizes.length > 0,
@@ -1100,7 +1450,15 @@
       status: media.status,
       progress: media.progress || 0,
     });
-    if (status === "done" || status === "error") pushMediaList();
+    if (status === "done" || status === "error") {
+      if (registryProgressTimer) clearTimeout(registryProgressTimer);
+      registryProgressTimer = null;
+      pushMediaList();
+    } else if (progress === 0) {
+      publishRegistry(buildPanelItems());
+    } else {
+      scheduleRegistryProgress();
+    }
   }
 
   /**
@@ -1176,12 +1534,12 @@
    * 批量下载 —— 多线程并发调度。
    * worker 从共享游标领任务，天然不重复；全部 worker 空闲时结束。
    */
-  async function startBatchDownload(shareUrls) {
+  async function startBatchDownload(shareUrls, requestedConcurrency) {
     if (downloadTask.running) return;
 
-    const targets = shareUrls
+    const targets = [...new Set(shareUrls)]
       .map((url) => mediaList.find((item) => item.shareUrl === url))
-      .filter((item) => item && item.status !== "done");
+      .filter((item) => item && item.status !== "done" && item.status !== "downloading");
 
     if (!targets.length) {
       sendToPanel({ type: "toast", message: "没有需要下载的视频（已完成的不再重复下载）" });
@@ -1191,7 +1549,7 @@
     downloadTask = { running: true, stopped: false };
 
     const total = targets.length;
-    const plan = resolveConcurrency(targets);
+    const plan = resolveConcurrency(targets, requestedConcurrency);
     const workerCount = Math.min(plan.threads, total);
     console.log("[视频下载] 线程数", workerCount, "=", plan.source, "预算", formatSize(plan.usableBytes), "÷ 单条", formatSize(plan.perVideo));
     sendToPanel({ type: "batch_started", total, concurrency: workerCount, memory: plan });
@@ -1272,7 +1630,7 @@
         sendResponse({ ok: false, error: "该网页没有待下载的视频" });
         return true;
       }
-      startBatchDownload(available);
+      startBatchDownload(available, message.concurrency);
       sendResponse({ ok: true, accepted: available.length });
       return true;
     }

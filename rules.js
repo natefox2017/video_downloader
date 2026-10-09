@@ -50,6 +50,7 @@ const DEFAULT_SETTINGS = {
   format: "source",
   quality: "best",
   rememberPanelPosition: true,
+  batchConcurrency: 4,
   platformStrategies: {},
 };
 

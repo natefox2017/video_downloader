@@ -13,11 +13,11 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
 - **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
-- **Extension icon badge**: shows the number of detected videos on the current tab in real time, over a flat blue circular icon containing only a white downward arrow
+- **Extension icon badge**: shows the number of detected videos on the current tab in real time, over a blue rounded-square icon with one centered white downward arrow (16/32/48/128px PNG)
 - **Cross-tab video monitor**: the Batch Download item in the shared left sidebar opens a standalone Monitor page aggregating videos from all open tabs
-- **Settings page**: sidebar-style admin UI for source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy and remembered panel position; repository and bug-report links live in the sidebar
-- **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status
-- **Batch downloads**: newly detected videos are selected automatically; when multiple videos are present, uncheck any you do not want
+- **Settings page**: sidebar-style admin UI for source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, per-site batch concurrency and remembered panel position; repository and bug-report links live in the sidebar
+- **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status. The content height adapts to the number of rows; only lists exceeding the 480px body cap (or the remaining viewport) scroll
+- **Batch downloads**: multi-select, per-site checkboxes, filtered search, independent tab identities, per-item progress and concurrent dispatch to originating tabs
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
 - **Zero build step**: vanilla JS, no frameworks, no dependencies, no bundler
@@ -71,7 +71,7 @@ See [Chrome Web Store release and submission guide](docs/RELEASE_CRX.md) for rev
 3. Click the icon → floating panel appears; its last dragged position is restored when enabled in Settings
 4. Check the rows you want (newly detected videos are selected automatically)
 5. Click **Download selected**
-6. For cross-site batches, open Settings and choose **批量下载** in the left sidebar. The Monitor groups videos by browser tab and dispatches each download to its originating tab
+6. For cross-site batches, open Settings and choose **批量下载** in the left sidebar. Search or expand each website group, check only the desired videos, optionally adjust the per-site concurrency (2/4/6/8 or automatic), and click **下载选中的视频**. Click any thumbnail to preview the direct video source; unsupported HLS/restricted sources show a clear message
 7. Files land in your browser's default download directory
 
 ### Panel guide
@@ -79,9 +79,9 @@ See [Chrome Web Store release and submission guide](docs/RELEASE_CRX.md) for rev
 | Area | What it does |
 |---|---|
 | Result row | Shows a small preview thumbnail, video title, file size, and selection when multiple videos are detected |
-| Preview | Click the thumbnail to open a compact video preview |
+| Preview | Click the thumbnail to open a standalone viewport-sized video dialog *outside* the 320px panel iframe; close with Escape, backdrop or close button |
 | Bottom bar | Download the selected video(s) or stop the active batch |
-| Panel header | Shows the extension version; Settings opens the standalone options page; collapsed mode becomes a circular download button |
+| Panel header | Drag the title bar to reposition. Collapsing creates a draggable white circular launcher with a purple arrow and shadow; click it to expand. Settings opens the standalone options page |
 
 ## Supported platforms
 
@@ -152,7 +152,8 @@ Page
  │   normalized media objects ────────────▶ │──▶ Blob ──▶ download
  │                                          │
  └──────────────────────────────────────────┘
-              Shadow DOM + iframe → panel.html/js (UI only)
+              Shadow DOM host → panel.html/js (iframe, UI only)
+                             → viewport preview dialog (sibling of panel)
 ```
 
 **Why two worlds**: page JS variables are only readable from the main world, so extraction runs there; downloading requires bypassing CORS, which only the isolated world can do. Extractors never download.
@@ -164,7 +165,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 - **Direct links**: candidate URLs are ordered by the saved format / quality preference when real variant metadata is available, then tried with fallback
 - **m3u8**: master-playlist variants follow the saved quality preference when resolution metadata is present → segments downloaded concurrently (6 workers) → merged
 - **DASH video-only** (e.g. Bilibili): separate audio track downloaded automatically as `*_audio.m4a`
-- **Concurrency**: adaptive — `memory budget × 70% ÷ avg video size`, clamped to 2–16 workers; heap pressure monitored live
+- **Concurrency**: a per-originating-tab preference (2/4/6/8 concurrent videos; 4 by default; automatic mode available) caps the adaptive estimate of `memory budget × 70% ÷ avg video size` (2–16 workers). Heap pressure is still monitored live. Multiple tabs run independently; this is not a global concurrency cap
 - **Encrypted streams** (`EXT-X-KEY`): reported as unsupported, never silently skipped
 
 ## Contributing
@@ -178,6 +179,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To add a platform, see [docs/ADD_PLATFOR
 
 ## Settings implementation
 
-The standalone Settings and Monitor pages use a **responsive browser-web layout**: on wide screens, a compact left-side navigation card links **批量下载 / 插件设置**, while on narrow screens the links move above the page content. The pages scroll naturally rather than simulating a fixed-height desktop application. Both pages use vendored **Pico CSS 2.1.1 (MIT)** for controls and tables. The UI uses flat surfaces, a blue circular download-arrow logo and no gradients. They do not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
+The standalone Settings and Monitor pages use a **responsive browser-web layout**: on wide screens, a compact left-side navigation card links **批量下载 / 插件设置**, while on narrow screens the links move above the page content. The pages scroll naturally rather than simulating a fixed-height desktop application. Both pages use vendored **Pico CSS 2.1.1 (MIT)** plus local, accessible **UI component styles** for buttons, checkboxes, selects, status badges, progress bars and a video preview dialog. The UI uses flat surfaces, a blue rounded-square download-arrow logo and no gradients. They do not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
 
-The dedicated `monitor.html` page shows the cross-tab detected-video list, grouped by website tab. The registry is stored temporarily in `chrome.storage.session`; updates from multiple tabs are serialized to avoid lost reports. Only display fields and the per-tab media key are stored there. Checked video selections are preserved during live updates, and actual downloads still execute inside each originating tab's `content.js`. Closing or navigating a tab removes its prior entries.
+The dedicated `monitor.html` page shows the cross-tab detected-video list, grouped by website tab. The registry is stored temporarily in `chrome.storage.session`; updates from multiple tabs are serialized to avoid lost reports. The session registry holds per-tab media keys and UI-only fields (title, cover, preview URL, size, quality, status and throttled progress); no download candidate lists are duplicated into it. Checked video selections persist during live updates and search/collapse. Downloads still execute inside each originating tab's `content.js`. Closing or navigating a tab removes its prior entries.

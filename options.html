@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>视频下载 - 插件设置</title>
   <link rel="stylesheet" href="vendor/pico.min.css" />
+  <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
   <div class="app-layout">
     <aside class="app-sidebar" aria-label="应用侧边栏">
       <a class="brand" href="monitor.html" aria-label="视频下载助手首页">
-        <img class="brand__logo" src="images/logo.svg" width="60" height="60" alt="" />
+        <img class="brand__logo" src="images/logo.svg" width="52" height="52" alt="" />
         <span class="brand__text">
           <strong>视频下载助手</strong>
           <small id="version"></small>
@@ -19,8 +20,14 @@
       </a>
       <nav class="side-nav" aria-label="功能菜单">
         <span class="side-nav__heading">功能</span>
-        <a class="side-nav__link" href="monitor.html">批量下载</a>
-        <a class="side-nav__link is-active" href="options.html" aria-current="page">插件设置</a>
+        <a class="side-nav__link" href="monitor.html">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M8 9h8M8 13h5"/></svg>
+          批量下载
+        </a>
+        <a class="side-nav__link is-active" href="options.html" aria-current="page">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6M15 14v6"/></svg>
+          插件设置
+        </a>
       </nav>
       <div class="sidebar-support">
         <span class="side-nav__heading">项目</span>
@@ -41,21 +48,36 @@
           <div class="settings-grid">
             <div class="settings-field">
               <label for="format">视频格式</label>
-              <select id="format">
-                <option value="source">源格式（推荐）</option>
-                <option value="mp4">MP4 优先（有 MP4 源时）</option>
-              </select>
+              <span class="ui-select-wrap">
+                <select id="format" class="ui-select">
+                  <option value="source">源格式（推荐）</option>
+                  <option value="mp4">MP4 优先（有 MP4 源时）</option>
+                </select>
+              </span>
               <p class="field-help">不转码，只调整已有视频源的优先级。</p>
             </div>
             <div class="settings-field">
               <label for="quality">默认清晰度</label>
-              <select id="quality"></select>
+              <span class="ui-select-wrap"><select id="quality" class="ui-select"></select></span>
               <p class="field-help">只在网站提供多个清晰度时生效。</p>
+            </div>
+            <div class="settings-field">
+              <label for="concurrency">每个网页并发任务</label>
+              <span class="ui-select-wrap">
+                <select id="concurrency" class="ui-select">
+                  <option value="2">2 路</option>
+                  <option value="4">4 路（推荐）</option>
+                  <option value="6">6 路</option>
+                  <option value="8">8 路</option>
+                  <option value="auto">自动（内存自适应）</option>
+                </select>
+              </span>
+              <p class="field-help">每个网页单独调度；实际并发数还受浏览器内存限制。</p>
             </div>
           </div>
           <div class="setting-switch">
             <label for="remember-position">
-              <input id="remember-position" type="checkbox" role="switch" />
+              <input id="remember-position" class="ui-switch" type="checkbox" role="switch" />
               记住浮动面板位置
             </label>
           </div>
@@ -76,11 +98,11 @@
           <h2 id="feedback-title">问题反馈</h2>
           <p class="section-hint">下载失败时，可以附上问题网页、视频标题及控制台报错。不要公开 Cookie 或包含私密 Token 的视频链接。</p>
           <div class="feedback-actions">
-            <a class="secondary outline" role="button" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">提交 Bug</a>
+            <a class="ui-button ui-button--quiet" role="button" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">提交 Bug</a>
             <a class="secondary outline" role="button" href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">查看开源仓库</a>
           </div>
         </section>
-        <footer class="page-footer">界面基于 Pico CSS 2.1.1（MIT）</footer>
+        <footer class="page-footer">界面基于本地 UI 组件及 Pico CSS 2.1.1（MIT）</footer>
       </div>
     </main>
   </div>

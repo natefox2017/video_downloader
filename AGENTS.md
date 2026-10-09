@@ -64,6 +64,10 @@ Functional verification (no automated test framework — verify by hand):
 3. **The panel is UI only, never downloads.**
    `panel.js` is cross-origin from the page and can only send/receive via `postMessage`;
    downloading, dedup, and concurrency all live in `content.js`.
+   The video preview overlay lives in `content.js` as a sibling of the paint-contained
+   panel, never inside the small `panel.html` iframe. Panel height is measured by
+   `panel.js` and clamped in `content.js`; only overflow lists scroll. Collapsed
+   launcher pointer-drag must not trigger the expand click.
 4. **Closing the panel = `display:none`, never destroyed.**
    Hiding the panel must not interrupt an ongoing download.
 5. **Keep permissions minimal.**
@@ -77,12 +81,19 @@ Functional verification (no automated test framework — verify by hand):
    When adding a message type, change the sender / receiver in `content.js` **and**
    `panel.js` together, and update the protocol table in `README.md`.
    The `source` field namespace is `vd-*` (`vd-extractor` / `vd-content` / `vd-panel`).
-7. **Injected scripts must be idempotent.**
+7. **The monitor is presentation and dispatch only.**
+   `monitor.html/js` must not fetch media or merge video streams. Its registry stores
+   UI metadata (including optional cover/preview URL and throttled progress), keyed by
+   both tab ID and media ID. Preview is a regular browser `<video>`; restricted and
+   HLS streams need honest fallbacks instead of fake playback.
+   The per-tab worker setting is capped again by the content script's adaptive
+   memory guard. Do not claim a global concurrency cap across tabs.
+8. **Injected scripts must be idempotent.**
    Main-world extractors guard with `window.__VD_EXTRACTOR_<PLATFORM>__`;
    the content script guards with `window.__VD_CONTENT_READY__`
    (extension reloads and SPA navigations cause repeat injections) —
    keep this pattern for any new entry point.
-8. **Extractor scripts only "read and report", never decide.**
+9. **Extractor scripts only "read and report", never decide.**
    Dedup, merging, filename fallbacks, and download-method selection
    (direct link vs m3u8) all live in `content.js`;
    when an extractor's reported media object is missing fields, `content.js`
