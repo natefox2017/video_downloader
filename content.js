@@ -323,6 +323,7 @@
       media.verificationState = verified ? "verified" : "rejected";
       if (verified) {
         media.verifiedUrl = verified.url;
+        media.verifiedKind = verified.kind;
         if (verified.size > 0) media.verifiedSize = verified.size;
       }
       pushMediaList();
@@ -1139,6 +1140,7 @@
         author: item.author,
         cover: item.cover,
         previewUrl: item.verifiedUrl || "",
+        isHls: item.verifiedKind === "hls",
         size: item.verifiedSize || (variant?.url === item.verifiedUrl ? variant?.size : 0) || item.size,
         quality: variant?.label || "",
         type: item.type,
@@ -1168,6 +1170,7 @@
       title: item.title,
       cover: item.cover,
       previewUrl: item.previewUrl,
+      isHls: item.isHls,
       size: item.size,
       quality: item.quality,
       platform: item.platform,
@@ -1276,11 +1279,16 @@
 
     // The manual limit is per originating tab; memory pressure can reduce it.
     const setting = requestedConcurrency == null ? extensionSettings.batchConcurrency : requestedConcurrency;
+    // A known 465 MB video should not be fetched alongside several similar Blobs.
+    const largestKnown = Math.max(0, ...sizes);
+    const inflightLimit = largestKnown > 0
+      ? Math.max(1, Math.floor(DOWNLOAD_RULES.MAX_INFLIGHT_MEDIA_BYTES / largestKnown))
+      : 2;
     const manualLimit = Number(setting) > 0
       ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(Number(setting))))
       : MAX_CONCURRENCY;
     return {
-      threads: Math.min(manualLimit, Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw))),
+      threads: Math.min(manualLimit, inflightLimit, Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw))),
       usableBytes: Math.round(usableBytes),
       perVideo,
       sizeSampled: sizes.length > 0,
@@ -1323,42 +1331,82 @@
     return (bytes / Math.pow(1024, index)).toFixed(2) + " " + units[index];
   }
 
-  /** 带进度回调的下载（fetch → Blob）；进度按 2% 步进回调 */
-  async function fetchWithProgress(url, onProgress, timeoutMs = 120000) {
+  /** Controllers allow Stop to cancel active fetches, not only queued workers. */
+  const activeDownloadControllers = new Set();
+
+  /**
+   * A rolling idle timeout aborts stalled transfers without cutting off
+   * healthy large videos after an arbitrary two-minute wall-clock limit.
+   * The response type and initial bytes are checked before retaining data.
+   * @param {string} url Direct media URL.
+   * @param {Function|null} onProgress Progress callback (0..99 until saved).
+   * @param {number} timeoutMs Max inactivity between chunks.
+   * @returns {Promise<Blob>} Verified downloaded media data.
+   */
+  async function fetchWithProgress(url, onProgress, timeoutMs = DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    activeDownloadControllers.add(controller);
+    let timeoutId;
+    let timedOut = false;
+    const renewIdleTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+    };
+    renewIdleTimer();
     try {
+      if (downloadTask.stopped) throw new Error("用户已停止");
       const response = await fetch(url, { credentials: "omit", signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const mime = response.headers.get("content-type") || "";
+      if (isRejectedMediaMimeType(mime)) throw new Error("服务器返回非视频内容：" + mime);
 
       const total = Number(response.headers.get("content-length")) || 0;
-      if (!response.body || !onProgress) {
-        const blob = await response.blob();
-        clearTimeout(timer);
-        return blob;
-      }
-
+      if (!response.body) throw new Error("视频响应没有可读取的数据流");
       const reader = response.body.getReader();
       const chunks = [];
       let loaded = 0;
       let lastPercent = -1;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-        const percent = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 95;
-        if (percent - lastPercent >= 2 || percent >= 99) {
-          lastPercent = percent;
-          onProgress(percent);
+      let firstChunk = true;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          renewIdleTimer();
+          if (firstChunk) {
+            firstChunk = false;
+            const signature = sniffVideoSignature(value);
+            if (signature === "invalid" || (signature !== "video" && !isVideoMimeType(mime))) {
+              throw new Error("响应内容不是有效视频");
+            }
+          }
+          chunks.push(value);
+          loaded += value.byteLength;
+          if (total && onProgress) {
+            const percent = Math.min(99, Math.floor((loaded / total) * 100));
+            if (percent - lastPercent >= 2) {
+              lastPercent = percent;
+              onProgress(percent);
+            }
+          }
         }
+      } catch (error) {
+        reader.cancel().catch(() => {});
+        throw error;
       }
-      clearTimeout(timer);
-      return new Blob(chunks, { type: response.headers.get("content-type") || "application/octet-stream" });
+      if (loaded < DOWNLOAD_RULES.MIN_VALID_BYTES) throw new Error("视频内容为空或不完整");
+      return new Blob(chunks, { type: mime || "application/octet-stream" });
     } catch (error) {
-      clearTimeout(timer);
-      if (error.name === "AbortError") throw new Error("下载超时（120秒无响应）");
+      if (controller.signal.aborted && downloadTask.stopped) throw new Error("用户已停止");
+      if (timedOut || error.name === "AbortError") {
+        throw new Error("下载停滞：" + Math.round(timeoutMs / 1000) + " 秒未收到数据");
+      }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      activeDownloadControllers.delete(controller);
     }
   }
 
@@ -1401,17 +1449,29 @@
     return false;
   }
 
-  /** 依次尝试视频的所有候选地址，返回第一个下载成功的 Blob */
+  /**
+   * Prefer the already verified URL; verify alternate CDNs before downloading.
+   * @param {object} media Validated media entry.
+   * @param {Function} onProgress Progress callback.
+   * @returns {Promise<{blob: Blob, url: string}>} Successful payload and origin.
+   */
   async function fetchVideoWithFallback(media, onProgress) {
-    const candidates = downloadCandidateUrls(media);
+    const candidates = [...new Set([media.verifiedUrl, ...downloadCandidateUrls(media)].filter(Boolean))];
     let lastError = null;
 
     for (const url of candidates) {
+      if (downloadTask.stopped) throw new Error("用户已停止");
       try {
+        if (url !== media.verifiedUrl) {
+          const proof = await queueMediaProbe(url);
+          if (!proof || proof.kind !== "video") throw new Error("候选地址不是有效视频");
+        }
+        onProgress?.(0);
         const blob = await fetchWithProgress(url, onProgress);
         if (blob.size < DOWNLOAD_RULES.MIN_VALID_BYTES) throw new Error("文件内容为空");
-        return blob;
+        return { blob, url };
       } catch (error) {
+        if (downloadTask.stopped) throw error;
         lastError = error;
         console.warn("[视频下载] 该地址下载失败，改用下一个候选地址：", url, error);
       }
@@ -1543,7 +1603,9 @@
    * @returns {Promise<{blob: Blob, ext: string}>}
    */
   async function downloadM3u8(media, onProgress) {
-    const playlistUrl = (media.videoUrls || []).find((url) => isPlaylistUrl(url)) || media.videoUrl;
+    const playlistUrl = media.verifiedKind === "hls"
+      ? media.verifiedUrl
+      : (media.videoUrls || []).find((url) => isPlaylistUrl(url)) || media.videoUrl;
     if (!playlistUrl) throw new Error("没有可用的播放列表地址");
 
     // 1) 取播放列表；主列表则选最高码率
@@ -1556,7 +1618,8 @@
       playlistText = await fetchTextWithTimeout(variantUrl, DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS);
     }
 
-    // 2) 解析分段
+    // 2) Only a valid HLS video manifest can enter the segment download path.
+    if (!isHlsVideoPlaylist(playlistText)) throw new Error("播放列表不是有效视频");
     const { segments, initUrl } = parseMediaPlaylist(playlistText, playlistBase);
     if (!segments.length) throw new Error("播放列表中没有找到视频分段");
 
@@ -1580,7 +1643,7 @@
         }
         parts[index] = buffer;
         completed++;
-        if (onProgress) onProgress(Math.floor((completed / total) * 100));
+        if (onProgress) onProgress(Math.min(99, Math.floor((completed / total) * 100)));
       }
     }
 
@@ -1606,7 +1669,7 @@
       status: media.status,
       progress: media.progress || 0,
     });
-    if (status === "done" || status === "error") {
+    if (status === "done" || status === "error" || status === "idle") {
       if (registryProgressTimer) clearTimeout(registryProgressTimer);
       registryProgressTimer = null;
       pushMediaList();
@@ -1629,7 +1692,8 @@
 
     try {
       // ---- m3u8：分段下载后合并 ----
-      const playlistUrl = (media.videoUrls || []).find((url) => isPlaylistUrl(url));
+      const playlistUrl = media.verifiedKind === "hls"
+        ? media.verifiedUrl : (media.videoUrls || []).find((url) => isPlaylistUrl(url));
       if (playlistUrl || isPlaylistUrl(media.videoUrl)) {
         const { blob, ext } = await downloadM3u8(media, (percent) => {
           reportItemStatus(media, "downloading", percent);
@@ -1654,10 +1718,11 @@
       }
 
       // ---- 直链视频：依次尝试候选地址 ----
-      const videoBlob = await fetchVideoWithFallback(media, (percent) => {
-        reportItemStatus(media, "downloading", Math.floor(percent * 0.9));
+      const { blob: videoBlob, url: downloadedUrl } = await fetchVideoWithFallback(media, (percent) => {
+        reportItemStatus(media, "downloading", percent);
       });
-      const ext = guessMediaExt(media.videoUrl) || "mp4";
+      reportItemStatus(media, "finalizing", 99);
+      const ext = guessMediaExt(downloadedUrl) || "mp4";
       const saveExt = ext === "m3u8" ? "mp4" : ext;
       saveBlob(videoBlob, `${media.fileName}.${saveExt}`);
 
@@ -1679,6 +1744,10 @@
       reportItemStatus(media, "done", 100);
       return true;
     } catch (error) {
+      if (downloadTask.stopped && String(error.message || error) === "用户已停止") {
+        reportItemStatus(media, "idle", 0);
+        return false;
+      }
       console.error("[视频下载] 下载失败：", error);
       reportItemStatus(media, "error", 0);
       sendToPanel({ type: "item_error", shareUrl: media.shareUrl, message: String(error.message || error) });
@@ -1754,6 +1823,7 @@
 
   function stopBatchDownload() {
     downloadTask.stopped = true;
+    for (const controller of activeDownloadControllers) controller.abort();
   }
 
   /* ================================================================== */
