@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>视频下载 - 批量下载</title>
+  <title>视频下载助手 · 批量下载</title>
   <link rel="stylesheet" href="vendor/pico.min.css" />
+  <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="options.css" />
   <link rel="stylesheet" href="monitor.css" />
 </head>
@@ -12,7 +13,7 @@
   <div class="app-layout">
     <aside class="app-sidebar" aria-label="应用侧边栏">
       <a class="brand" href="monitor.html" aria-label="视频下载助手首页">
-        <img class="brand__logo" src="images/logo.svg" width="60" height="60" alt="" />
+        <img class="brand__logo" src="images/logo.svg" width="52" height="52" alt="" />
         <span class="brand__text">
           <strong>视频下载助手</strong>
           <small id="version"></small>
@@ -20,8 +21,14 @@
       </a>
       <nav class="side-nav" aria-label="功能菜单">
         <span class="side-nav__heading">功能</span>
-        <a class="side-nav__link is-active" href="monitor.html" aria-current="page">批量下载</a>
-        <a class="side-nav__link" href="options.html">插件设置</a>
+        <a class="side-nav__link is-active" href="monitor.html" aria-current="page">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M8 9h8M8 13h5"/></svg>
+          批量下载
+        </a>
+        <a class="side-nav__link" href="options.html">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6M15 14v6"/></svg>
+          插件设置
+        </a>
       </nav>
       <div class="sidebar-support">
         <span class="side-nav__heading">项目</span>
@@ -34,37 +41,95 @@
       <div class="page-content">
         <header class="page-header monitor-page-header">
           <div>
+            <span class="page-kicker">下载中心 / 视频管理</span>
             <h1>批量下载</h1>
-            <p>查看当前打开网站中的视频，按需勾选并批量下载</p>
+            <p>集中查看当前打开的网页，自由选择视频并发下载</p>
           </div>
-          <button id="refresh-registry" class="secondary outline" type="button">刷新列表</button>
+          <button id="refresh-registry" class="ui-button ui-button--quiet" type="button">
+            <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.4 9a7 7 0 0 1 12.2-1.4L20 12M4 12l1.4 4.4A7 7 0 0 0 17.6 15"/></svg>
+            刷新列表
+          </button>
         </header>
+
+        <section class="monitor-stats" aria-label="检测概览">
+          <div class="stat-card"><span>已打开网页</span><strong id="stat-sites">0</strong><small>跨标签页同步</small></div>
+          <div class="stat-card"><span>检测到的视频</span><strong id="stat-total">0</strong><small>按网页分组展示</small></div>
+          <div class="stat-card"><span>可下载</span><strong id="stat-available">0</strong><small>可多选批量提交</small></div>
+        </section>
 
         <section class="surface monitor-panel" aria-labelledby="monitor-title">
           <div class="monitor-toolbar">
-            <div>
-              <h2 id="monitor-title">已检测视频</h2>
+            <div class="monitor-toolbar__heading">
+              <h2 id="monitor-title">视频列表</h2>
               <small id="registry-summary">正在读取…</small>
             </div>
-            <label class="select-all-label" for="select-all">
-              <input id="select-all" type="checkbox" />
-              全选可下载视频
+            <label class="monitor-search" for="search-videos">
+              <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.2 4.2"/></svg>
+              <input id="search-videos" type="search" class="ui-input" placeholder="搜索视频标题或网站" autocomplete="off" />
             </label>
+          </div>
+          <div class="monitor-controls">
+            <label class="ui-checkbox-label" for="select-all">
+              <input id="select-all" class="ui-checkbox" type="checkbox" />
+              <span>全选当前列表</span>
+            </label>
+            <div class="monitor-controls__right">
+              <label for="concurrency">每个网页并发下载</label>
+              <span class="ui-select-wrap">
+                <select id="concurrency" class="ui-select" aria-label="每个网页最大并发任务数">
+                  <option value="2">2 路</option>
+                  <option value="4" selected>4 路</option>
+                  <option value="6">6 路</option>
+                  <option value="8">8 路</option>
+                  <option value="auto">自动</option>
+                </select>
+              </span>
+            </div>
           </div>
 
           <div id="registry-empty" class="monitor-empty" hidden>
-            暂时没有检测到视频。请先在网页播放视频，再回来刷新。
+            <span class="monitor-empty__icon" aria-hidden="true">
+              <svg class="ui-icon" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+            </span>
+            <strong>还没有检测到视频</strong>
+            <span id="empty-help">请先打开一个视频网页，播放后返回此页面刷新。</span>
           </div>
-          <div id="registry" aria-live="off"></div>
+          <div id="registry" class="site-list" aria-live="off"></div>
 
           <div class="monitor-actions">
-            <button id="download-selected" type="button" disabled>下载选中的视频</button>
-            <p id="download-status" class="download-status" role="status" aria-live="polite"></p>
+            <div class="monitor-actions__info">
+              <strong id="selection-summary">尚未选择视频</strong>
+              <p id="download-status" class="download-status" role="status" aria-live="polite">支持跨网页多选，下载将在视频所在标签页进行。</p>
+            </div>
+            <button id="download-selected" class="ui-button monitor-download" type="button" disabled>
+              <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v3h14v-3"/></svg>
+              <span id="download-button-label">下载选中的视频</span>
+            </button>
           </div>
         </section>
-        <footer class="page-footer">仅汇总当前打开的网页，关闭标签页后记录会移除。</footer>
+        <footer class="page-footer">仅汇总当前打开的网页 · 关闭或跳转标签页后，旧记录会自动移除</footer>
       </div>
     </main>
+  </div>
+
+  <div id="preview-modal" class="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title" hidden>
+    <div class="preview-modal__backdrop" data-close-preview></div>
+    <div class="preview-modal__panel" tabindex="-1">
+      <header class="preview-modal__header">
+        <div>
+          <small>视频预览</small>
+          <h2 id="preview-title">视频</h2>
+        </div>
+        <button id="preview-close" class="preview-modal__close" type="button" aria-label="关闭预览">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg>
+        </button>
+      </header>
+      <div class="preview-modal__stage">
+        <video id="preview-video" controls playsinline preload="metadata"></video>
+        <div id="preview-message" class="preview-modal__message" hidden></div>
+      </div>
+      <p class="preview-modal__hint">预览使用网站提供的视频源，部分加密流或限制外链的资源可能无法播放。</p>
+    </div>
   </div>
   <script src="monitor.js"></script>
 </body>
