@@ -107,3 +107,18 @@
 @media (prefers-reduced-motion: reduce) {
   .ui-button, .ui-progress__bar { transition: none; }
 }
+
+.ui-switch {
+  position:relative; appearance:none; flex:none; width:38px; height:22px; margin:0;
+  border:1px solid #cbd5e1; border-radius:999px; background:#cbd5e1;
+  cursor:pointer; box-shadow:none; transition:background .15s,border-color .15s;
+}
+.ui-switch::before {
+  content:""; position:absolute; left:3px; top:3px; width:14px; height:14px;
+  border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.12);
+  transition:transform .15s;
+}
+.ui-switch:checked { border-color:#2563eb; background:#2563eb; }
+.ui-switch:checked::before { transform:translateX(16px); }
+.ui-switch:focus-visible { outline:3px solid rgba(37,99,235,.22);outline-offset:2px; }
+@media(prefers-reduced-motion:reduce){.ui-switch,.ui-switch::before{transition:none}}
