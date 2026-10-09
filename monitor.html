@@ -3,54 +3,69 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>视频下载 - 视频监测</title>
+  <title>视频下载 - 批量下载</title>
   <link rel="stylesheet" href="vendor/pico.min.css" />
   <link rel="stylesheet" href="options.css" />
   <link rel="stylesheet" href="monitor.css" />
 </head>
 <body>
-  <main class="container">
-    <nav class="app-nav" aria-label="页面导航">
-      <ul>
-        <li><img class="app-logo" src="images/128.png" alt="" /></li>
-        <li><strong>视频监测</strong> <small id="version"></small></li>
-      </ul>
-      <ul>
-        <li><a href="options.html">插件设置</a></li>
-        <li><a href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a></li>
-      </ul>
-    </nav>
-
-    <section class="monitor-panel" aria-labelledby="monitor-title">
-      <div class="monitor-heading">
-        <div>
-          <h1 id="monitor-title">已检测视频</h1>
-          <p>汇总当前打开网页中检测到的视频。选择多个网站的视频后，可以一次批量下载。</p>
-        </div>
-        <button id="refresh-registry" class="secondary outline" type="button">刷新</button>
+  <div class="app-layout">
+    <aside class="app-sidebar" aria-label="应用侧边栏">
+      <a class="brand" href="monitor.html" aria-label="视频下载助手首页">
+        <img class="brand__logo" src="images/logo.svg" width="60" height="60" alt="" />
+        <span class="brand__text">
+          <strong>视频下载助手</strong>
+          <small id="version"></small>
+        </span>
+      </a>
+      <nav class="side-nav" aria-label="功能菜单">
+        <span class="side-nav__heading">功能</span>
+        <a class="side-nav__link is-active" href="monitor.html" aria-current="page">批量下载</a>
+        <a class="side-nav__link" href="options.html">插件设置</a>
+      </nav>
+      <div class="sidebar-support">
+        <span class="side-nav__heading">项目</span>
+        <a class="side-nav__link" href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a>
+        <a class="side-nav__link" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">反馈 Bug</a>
       </div>
+    </aside>
 
-      <div class="monitor-toolbar">
-        <label class="select-all-label" for="select-all">
-          <input id="select-all" type="checkbox" />
-          全选可下载视频
-        </label>
-        <small id="registry-summary">正在读取…</small>
+    <main class="app-main" id="main-content">
+      <div class="page-content">
+        <header class="page-header monitor-page-header">
+          <div>
+            <h1>批量下载</h1>
+            <p>查看当前打开网站中的视频，按需勾选并批量下载</p>
+          </div>
+          <button id="refresh-registry" class="secondary outline" type="button">刷新列表</button>
+        </header>
+
+        <section class="surface monitor-panel" aria-labelledby="monitor-title">
+          <div class="monitor-toolbar">
+            <div>
+              <h2 id="monitor-title">已检测视频</h2>
+              <small id="registry-summary">正在读取…</small>
+            </div>
+            <label class="select-all-label" for="select-all">
+              <input id="select-all" type="checkbox" />
+              全选可下载视频
+            </label>
+          </div>
+
+          <div id="registry-empty" class="monitor-empty" hidden>
+            暂时没有检测到视频。请先在网页播放视频，再回来刷新。
+          </div>
+          <div id="registry" aria-live="off"></div>
+
+          <div class="monitor-actions">
+            <button id="download-selected" type="button" disabled>下载选中的视频</button>
+            <p id="download-status" class="download-status" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+        <footer class="page-footer">仅汇总当前打开的网页，关闭标签页后记录会移除。</footer>
       </div>
-
-      <div id="registry-empty" class="monitor-empty" hidden>
-        暂时没有检测到视频。请先打开视频网页并播放视频，再回来刷新。
-      </div>
-      <div id="registry" aria-live="off"></div>
-
-      <div class="monitor-actions">
-        <button id="download-selected" type="button" disabled>下载选中的视频</button>
-        <p id="download-status" class="download-status" role="status" aria-live="polite"></p>
-      </div>
-    </section>
-
-    <footer><small>仅汇总当前打开的网页；关闭标签页后，对应的视频会从这里移除。</small></footer>
-  </main>
+    </main>
+  </div>
   <script src="monitor.js"></script>
 </body>
 </html>

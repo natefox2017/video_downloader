@@ -13,9 +13,9 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
 - **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
-- **Extension icon badge**: shows the number of detected videos on the current tab in real time
-- **Cross-tab video monitor**: a standalone Monitor page aggregates detected videos from all open tabs and dispatches batch downloads across multiple sites
-- **Settings page**: source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, remembered panel position, repository and bug-report links (separate from the video monitor)
+- **Extension icon badge**: shows the number of detected videos on the current tab in real time, over a flat blue circular icon containing only a white downward arrow
+- **Cross-tab video monitor**: the Batch Download item in the shared left sidebar opens a standalone Monitor page aggregating videos from all open tabs
+- **Settings page**: sidebar-style admin UI for source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy and remembered panel position; repository and bug-report links live in the sidebar
 - **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status
 - **Batch downloads**: newly detected videos are selected automatically; when multiple videos are present, uncheck any you do not want
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
@@ -54,7 +54,7 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 3. Click the icon → floating panel appears; its last dragged position is restored when enabled in Settings
 4. Check the rows you want (newly detected videos are selected automatically)
 5. Click **Download selected**
-6. For cross-site batches, open **Settings → 视频监测与批量下载**; the Monitor opens as a separate page and groups videos by browser tab
+6. For cross-site batches, open Settings and choose **批量下载** in the left sidebar. The Monitor groups videos by browser tab and dispatches each download to its originating tab
 7. Files land in your browser's default download directory
 
 ### Panel guide
@@ -159,6 +159,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To add a platform, see [docs/ADD_PLATFOR
 
 ## Settings implementation
 
-The standalone Settings and Monitor pages both use vendored **Pico CSS 2.1.1 (MIT)**. They do not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
+The standalone Settings and Monitor pages share a lightweight two-column admin layout: a left sidebar for **批量下载 / 插件设置**, and a right workspace for each page. Both pages use vendored **Pico CSS 2.1.1 (MIT)** for controls and tables. The UI uses flat surfaces, a blue circular download-arrow logo and no gradients. They do not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
 
 The dedicated `monitor.html` page shows the cross-tab detected-video list, grouped by website tab. The registry is stored temporarily in `chrome.storage.session`; updates from multiple tabs are serialized to avoid lost reports. Only display fields and the per-tab media key are stored there. Checked video selections are preserved during live updates, and actual downloads still execute inside each originating tab's `content.js`. Closing or navigating a tab removes its prior entries.
