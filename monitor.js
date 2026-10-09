@@ -408,9 +408,17 @@
     if (event.key === "Escape") {
       event.preventDefault();
       closePreview();
-    } else if (event.key === "Tab" && !previewEl.contains(document.activeElement)) {
-      event.preventDefault();
-      previewCloseEl.focus();
+    } else if (event.key === "Tab") {
+      // Keep keyboard navigation inside the modal, including on Shift+Tab.
+      const targets = [previewCloseEl, previewVideoEl].filter((node) => !node.hidden);
+      const index = targets.indexOf(document.activeElement);
+      if (index === -1 || (!event.shiftKey && index === targets.length - 1)) {
+        event.preventDefault();
+        targets[0].focus();
+      } else if (event.shiftKey && index === 0) {
+        event.preventDefault();
+        targets[targets.length - 1].focus();
+      }
     }
   });
 
