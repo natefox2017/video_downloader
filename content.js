@@ -723,9 +723,6 @@
       case "stop_download":
         stopBatchDownload();
         break;
-      case "open_settings":
-        chrome.runtime.sendMessage({ type: "open_options" }).catch(() => {});
-        break;
       default:
         break;
     }

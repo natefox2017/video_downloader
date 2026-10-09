@@ -101,6 +101,8 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 │   ├── weibo.js
 │   └── xiaohongshu.js
 ├── panel.html / .css / .js # Floating panel UI (iframe, vanilla JS)
+├── options.html / .css / .js # Standalone settings + cross-tab detected-video queue
+├── vendor/pico.min.css     # Vendored Pico CSS 2.1.1 (MIT), settings UI
 ├── images/                 # Extension icons
 ├── docs/                   # Detailed documentation
 │   ├── ARCHITECTURE.md     #   How it works (two worlds, message protocol)

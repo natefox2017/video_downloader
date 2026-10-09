@@ -77,7 +77,10 @@ async function setBadge(tabId, count) {
   const text = safeCount > 0 ? String(safeCount > 99 ? "99+" : safeCount) : "";
   await chrome.action.setBadgeText({ text, tabId }).catch(() => {});
   if (text) {
-    await chrome.action.setBadgeBackgroundColor({ color: "#2563eb", tabId }).catch(() => {});
+    await chrome.action.setBadgeBackgroundColor({ color: "#dc2626", tabId }).catch(() => {});
+    if (chrome.action.setBadgeTextColor) {
+      await chrome.action.setBadgeTextColor({ color: "#ffffff", tabId }).catch(() => {});
+    }
   }
 }
 
