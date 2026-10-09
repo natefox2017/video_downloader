@@ -28,9 +28,12 @@ jobs:
       - name: JS syntax check
         run: |
           set -e
-          for f in background.js rules.js content.js panel.js options.js extractors/*.js; do
+          for f in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
             node --check "$f"
           done
 
       - name: Manifest parses
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest.json parses OK')"
+
+      - name: Cross-tab registry tests
+        run: node --test tests/*.test.js

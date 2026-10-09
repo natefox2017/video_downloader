@@ -1,0 +1,84 @@
+/*
+ * monitor.css — Light layout overrides for the separate monitoring page.
+ * All form inputs, buttons, and details elements use the vendored Pico CSS.
+ */
+.monitor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .9rem;
+}
+.monitor-heading h1 { font-size: 1.35rem; margin: 0 0 .35rem; }
+.monitor-heading p { font-size: .88rem; color: #6b7280; margin: 0; line-height: 1.5; }
+.monitor-heading button { width: auto; white-space: nowrap; margin: 0; }
+.monitor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  flex-wrap: wrap;
+  padding: .6rem .8rem;
+  border: 1px solid #e5e7eb;
+  border-radius: .5rem;
+  background: #fafafa;
+  margin-bottom: .75rem;
+}
+.select-all-label { display: inline-flex; align-items: center; gap: .55rem; font-weight: 500; margin: 0; }
+.select-all-label input { margin: 0; }
+#registry-summary { color: #6b7280; }
+.monitor-empty {
+  padding: 2rem 1rem;
+  margin-bottom: .75rem;
+  border: 1px dashed #d1d5db;
+  border-radius: .5rem;
+  color: #6b7280;
+  text-align: center;
+}
+.monitor-empty[hidden] { display: none; }
+.tab-group {
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: .5rem;
+  background: #fff;
+  margin: 0 0 .75rem;
+  padding: 0;
+}
+.tab-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-width: 0;
+  padding: .8rem .85rem;
+  margin: 0;
+  background: #f9fafb;
+  cursor: pointer;
+}
+.tab-group > summary::marker { color: #6b7280; }
+.tab-group > summary strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
+.tab-group > summary small { flex: 0 0 auto; color: #6b7280; }
+.tab-group[open] > summary { border-bottom: 1px solid #e5e7eb; }
+.video-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .65rem;
+  margin: 0;
+  padding: .7rem .85rem;
+  border-bottom: 1px solid #f1f3f5;
+  cursor: pointer;
+}
+.video-row:last-child { border-bottom: 0; }
+.video-row input { margin: 0; }
+.video-row.is-complete { opacity: .58; cursor: default; }
+.video-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-meta { white-space: nowrap; font-size: .8rem; color: #6b7280; }
+.monitor-actions { border-top: 1px solid #e5e7eb; padding-top: .85rem; margin-top: .5rem; }
+.monitor-actions button { width: 100%; margin: 0; }
+.download-status { margin: .5rem 0 0; color: #6b7280; font-size: .83rem; min-height: 1.2em; }
+@media (max-width: 650px) {
+  .monitor-heading { align-items: center; }
+  .video-row { grid-template-columns: auto minmax(0, 1fr); }
+  .video-meta { grid-column: 2; }
+}
