@@ -2,40 +2,19 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>视频下载助手</title>
+  <title>视频下载</title>
   <link rel="stylesheet" href="panel.css" />
 </head>
 <body>
-  <header class="topbar">
-    <label class="check">
-      <input type="checkbox" id="select-all" />
-      <span class="check__box">
-        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-          <path d="M2 6.5 4.8 9 10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-      <span>全选</span>
-    </label>
-    <span class="topbar__count" id="count"></span>
-  </header>
-
   <ul class="list" id="list"></ul>
 
   <div class="empty" id="empty">
-    <svg class="empty__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <rect x="3.5" y="5" width="17" height="14" rx="3" />
-      <path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" />
-    </svg>
-    <p class="empty__title">还没有识别到视频</p>
-    <p class="empty__desc">在页面播放视频后会自动出现</p>
+    <p>还没有识别到视频</p>
   </div>
 
   <footer class="actionbar">
     <button type="button" class="btn-primary" id="download" disabled>
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-        <path d="M8 2v8m0 0 3.5-3.5M8 10 4.5 6.5M2.5 13.5h11" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-      <span id="download-label">下载选中</span>
+      <span id="download-label">下载视频</span>
     </button>
   </footer>
 

@@ -1,8 +1,8 @@
 /**
- * panel.js — Compact floating-panel UI.
+ * panel.js — Minimal floating-panel UI.
  *
- * The panel only displays detected media, collects the current selection, and sends commands.
- * Downloading and media handling stay in content.js.
+ * The panel only shows detected videos, lets the user choose which ones to download,
+ * and reports essential download status. All download logic stays in content.js.
  */
 
 (() => {
@@ -17,24 +17,9 @@
 
   const listEl = document.getElementById("list");
   const emptyEl = document.getElementById("empty");
-  const countEl = document.getElementById("count");
-  const selectAllEl = document.getElementById("select-all");
   const downloadEl = document.getElementById("download");
   const downloadLabel = document.getElementById("download-label");
   const toastEl = document.getElementById("toast");
-
-  /**
-   * Format a byte count for compact display.
-   * @param {number} bytes Raw byte count.
-   * @returns {string} Human-readable size, or an empty string when unknown.
-   */
-  function formatSize(bytes) {
-    if (!bytes || bytes <= 0) return "";
-    const units = ["B", "KB", "MB", "GB"];
-    const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    const value = bytes / Math.pow(1024, index);
-    return value.toFixed(index === 0 ? 0 : value >= 10 ? 1 : 2) + " " + units[index];
-  }
 
   /**
    * Escape text inserted into HTML.
@@ -61,7 +46,7 @@
     toastEl.textContent = message;
     toastEl.classList.add("is-show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove("is-show"), 2000);
+    toastTimer = setTimeout(() => toastEl.classList.remove("is-show"), 1800);
   }
 
   /**
@@ -83,15 +68,7 @@
   }
 
   /**
-   * Return items that may still be selected for download.
-   * @returns {Object[]} Selectable media rows.
-   */
-  function selectableItems() {
-    return state.items.filter((item) => !isDone(item));
-  }
-
-  /**
-   * Build the compact state label for one item.
+   * Build the essential state label for one item.
    * @param {Object} item Media row.
    * @returns {string} State label.
    */
@@ -103,7 +80,7 @@
   }
 
   /**
-   * Return the CSS class for one item state label.
+   * Return the CSS class for one state label.
    * @param {Object} item Media row.
    * @returns {string} CSS class list.
    */
@@ -115,19 +92,17 @@
   }
 
   /**
-   * Render the current media list.
+   * Render the video list.
    * @returns {void}
    */
   function render() {
+    const single = state.items.length === 1;
+    document.body.classList.toggle("is-single", single);
     emptyEl.classList.toggle("hidden", state.items.length > 0);
 
     listEl.innerHTML = state.items.map((item) => {
       const selected = state.selected.has(item.shareUrl);
       const status = stateText(item);
-      const info = [
-        item.platform || "网页视频",
-        formatSize(item.size),
-      ].filter(Boolean).join(" · ");
       const classes = [
         "row",
         selected ? "is-selected" : "",
@@ -137,18 +112,17 @@
 
       return `
         <li class="${classes}" data-url="${escapeHtml(item.shareUrl)}">
-          <label class="check row__check${isDone(item) ? " is-disabled" : ""}" data-stop="1">
+          <label class="row__check" data-stop="1">
             <input type="checkbox" class="row__check-input" ${selected ? "checked" : ""} ${isDone(item) ? "disabled" : ""} />
-            <span class="check__box">
+            <span class="row__box">
               <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
                 <path d="M2 6.5 4.8 9 10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </span>
           </label>
           <div class="row__main">
-            <div class="row__title" title="${escapeHtml(item.title || "未命名视频")}">${escapeHtml(item.title || "未命名视频")}</div>
-            <div class="row__meta">
-              <span class="row__info">${escapeHtml(info)}</span>
+            <div class="row__line">
+              <div class="row__title" title="${escapeHtml(item.title || "视频")}">${escapeHtml(item.title || "视频")}</div>
               ${status ? `<span class="${stateClass(item)}">${escapeHtml(status)}</span>` : ""}
             </div>
             <div class="row__progress">
@@ -159,7 +133,7 @@
       `;
     }).join("");
 
-    renderToolbar();
+    renderAction();
     reportHeight();
   }
 
@@ -171,15 +145,14 @@
   function reportHeight() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-      const topbar = document.querySelector(".topbar")?.offsetHeight || 0;
       const actionbar = document.querySelector(".actionbar")?.offsetHeight || 0;
-      const contentHeight = state.items.length > 0 ? listEl.scrollHeight : 120;
-      post({ type: "panel_resize", height: topbar + contentHeight + actionbar + 8 });
+      const contentHeight = state.items.length > 0 ? listEl.scrollHeight : 88;
+      post({ type: "panel_resize", height: contentHeight + actionbar + 4 });
     }, 40);
   }
 
   /**
-   * Update only the mutable download state of one rendered row.
+   * Update only mutable download state in one row.
    * @param {Object} item Media row.
    * @returns {void}
    */
@@ -197,19 +170,20 @@
       checkbox.disabled = isDone(item);
     }
 
-    const status = row.querySelector(".row__state");
+    const line = row.querySelector(".row__line");
+    let status = row.querySelector(".row__state");
     const nextText = stateText(item);
-    if (status) {
-      status.textContent = nextText;
-      status.className = stateClass(item);
-    } else if (nextText) {
-      const meta = row.querySelector(".row__meta");
-      if (meta) {
-        const node = document.createElement("span");
-        node.className = stateClass(item);
-        node.textContent = nextText;
-        meta.appendChild(node);
+    if (nextText) {
+      if (!status && line) {
+        status = document.createElement("span");
+        line.appendChild(status);
       }
+      if (status) {
+        status.textContent = nextText;
+        status.className = stateClass(item);
+      }
+    } else if (status) {
+      status.remove();
     }
 
     const progress = row.querySelector(".row__progress-inner");
@@ -217,35 +191,24 @@
   }
 
   /**
-   * Refresh selection controls and the primary action.
+   * Refresh the only primary action.
    * @returns {void}
    */
-  function renderToolbar() {
-    const selectedCount = state.items.filter((item) => state.selected.has(item.shareUrl)).length;
-    const selectable = selectableItems();
-    const selectableSelected = selectable.filter((item) => state.selected.has(item.shareUrl)).length;
-    const selectAllLabel = selectAllEl.closest(".check");
+  function renderAction() {
+    const selectedCount = state.items.filter((item) => state.selected.has(item.shareUrl) && !isDone(item)).length;
 
     if (state.downloading) {
-      countEl.textContent = `下载中 ${state.batch.completed}/${state.batch.total}`;
-    } else {
-      countEl.textContent = selectedCount > 0 ? `已选 ${selectedCount}` : "";
-    }
-
-    selectAllEl.checked = selectable.length > 0 && selectableSelected === selectable.length;
-    selectAllEl.indeterminate = selectableSelected > 0 && selectableSelected < selectable.length;
-    selectAllEl.disabled = selectable.length === 0;
-    if (selectAllLabel) selectAllLabel.classList.toggle("is-disabled", selectable.length === 0);
-
-    if (state.downloading) {
-      downloadLabel.textContent = `停止下载 (${state.batch.completed}/${state.batch.total})`;
+      downloadLabel.textContent = state.batch.total > 1
+        ? `停止下载 ${state.batch.completed}/${state.batch.total}`
+        : "停止下载";
       downloadEl.classList.add("is-stop");
       downloadEl.disabled = false;
-    } else {
-      downloadLabel.textContent = selectedCount > 0 ? `下载 ${selectedCount} 项` : "下载选中";
-      downloadEl.classList.remove("is-stop");
-      downloadEl.disabled = selectedCount === 0;
+      return;
     }
+
+    downloadLabel.textContent = selectedCount > 1 ? `下载 ${selectedCount} 个视频` : "下载视频";
+    downloadEl.classList.remove("is-stop");
+    downloadEl.disabled = selectedCount === 0;
   }
 
   /**
@@ -256,9 +219,9 @@
   function finishText(message) {
     const succeeded = message.succeeded == null ? message.completed || 0 : message.succeeded;
     const failed = message.failed || 0;
-    if (message.stopped) return `已停止，完成 ${succeeded} 条${failed ? `，失败 ${failed} 条` : ""}`;
-    if (failed > 0) return `下载结束，成功 ${succeeded} 条，失败 ${failed} 条`;
-    return `全部完成，共 ${succeeded} 条`;
+    if (message.stopped) return "已停止";
+    if (failed > 0) return `完成 ${succeeded}，失败 ${failed}`;
+    return "下载完成";
   }
 
   /**
@@ -278,6 +241,7 @@
 
   listEl.addEventListener("click", (event) => {
     if (event.target.closest("[data-stop]")) return;
+    if (state.items.length === 1) return;
     const row = event.target.closest(".row");
     if (!row || !row.dataset.url) return;
     toggleOne(row.dataset.url);
@@ -291,19 +255,10 @@
     toggleOne(row.dataset.url, event.target.checked);
   });
 
-  selectAllEl.addEventListener("change", () => {
-    if (selectAllEl.checked) {
-      selectableItems().forEach((item) => state.selected.add(item.shareUrl));
-    } else {
-      state.selected.clear();
-    }
-    render();
-  });
-
   downloadEl.addEventListener("click", () => {
     if (state.downloading) {
       post({ type: "stop_download" });
-      toast("正在停止，已发起的下载完成后结束");
+      toast("正在停止");
       return;
     }
 
@@ -311,11 +266,7 @@
       .filter((item) => state.selected.has(item.shareUrl) && !isDone(item))
       .map((item) => item.shareUrl);
 
-    if (!shareUrls.length) {
-      toast("请先勾选需要下载的视频");
-      return;
-    }
-
+    if (!shareUrls.length) return;
     post({ type: "start_download", shareUrls });
   });
 
@@ -352,7 +303,7 @@
           item.progress = message.progress || 0;
           if (isDone(item)) state.selected.delete(item.shareUrl);
           updateRow(item);
-          renderToolbar();
+          renderAction();
         }
         break;
       }
@@ -360,8 +311,7 @@
       case "batch_started":
         state.downloading = true;
         state.batch = { completed: 0, total: message.total || 0 };
-        renderToolbar();
-        toast(`开始下载 ${message.total || 0} 条`);
+        renderAction();
         break;
 
       case "batch_progress":
@@ -369,7 +319,7 @@
           completed: message.completed || 0,
           total: message.total || 0,
         };
-        renderToolbar();
+        renderAction();
         break;
 
       case "batch_finished":
@@ -380,7 +330,7 @@
         break;
 
       case "item_error":
-        toast(`下载失败：${message.message || "未知错误"}`);
+        toast(message.message ? `下载失败：${message.message}` : "下载失败");
         break;
 
       case "toast":
