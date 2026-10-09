@@ -483,9 +483,9 @@
           width: 52px;
           height: 52px;
           border-radius: 50%;
-          border-color: rgba(79, 70, 229, .18);
-          background: #fff;
-          box-shadow: 0 6px 22px rgba(15, 23, 42, .22), 0 2px 8px rgba(79, 70, 229, .14);
+          border-color: rgba(255, 255, 255, .2);
+          background: #4f46e5;
+          box-shadow: 0 6px 22px rgba(15, 23, 42, .22), 0 2px 8px rgba(79, 70, 229, .25);
         }
         .vd-panel.collapsed .vd-panel__bar {
           width: 100%;
@@ -493,6 +493,7 @@
           flex: 1 0 auto;
           padding: 0;
           border: 0;
+          background: transparent;
           justify-content: center;
           cursor: grab;
         }
@@ -510,13 +511,13 @@
           width: 100%;
           height: 100%;
           border-radius: 50%;
-          background: #fff;
-          color: #4f46e5;
+          background: #4f46e5;
+          color: #fff;
           cursor: grab;
         }
         .vd-panel.collapsed #vd-collapse:hover {
-          background: #f5f3ff;
-          color: #4338ca;
+          background: #4338ca;
+          color: #fff;
         }
         .vd-panel.is-dragging .vd-panel__bar,
         .vd-panel.is-dragging #vd-collapse { cursor: grabbing; }
