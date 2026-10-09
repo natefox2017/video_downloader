@@ -61,6 +61,10 @@ Functional verification (no automated test framework — verify by hand):
 3. **The panel is UI only, never downloads.**
    `panel.js` is cross-origin from the page and can only send/receive via `postMessage`;
    downloading, dedup, and concurrency all live in `content.js`.
+   The video preview overlay lives in `content.js` as a sibling of the paint-contained
+   panel, never inside the small `panel.html` iframe. Panel height is measured by
+   `panel.js` and clamped in `content.js`; only overflow lists scroll. Collapsed
+   launcher pointer-drag must not trigger the expand click.
 4. **Closing the panel = `display:none`, never destroyed.**
    Hiding the panel must not interrupt an ongoing download.
 5. **Keep permissions minimal.**
