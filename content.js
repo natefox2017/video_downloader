@@ -387,6 +387,7 @@
 
   let host = null;
   let panelFrame = null;
+  let activePreviewShareUrl = "";
   const panelState = { collapsed: false, contentHeight: 144, suppressToggleClickUntil: 0 };
 
   function buildPanel() {
@@ -540,6 +541,109 @@
           color: #9ca3af;
           font-size: 12px;
         }
+        /* The preview is a sibling of .vd-panel, never inside its iframe
+           or its contain: paint boundary. It uses the viewport directly. */
+        .vd-preview {
+          position: fixed;
+          inset: 0;
+          z-index: 2;
+          width: 100vw;
+          height: 100dvh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-sizing: border-box;
+          padding: 16px;
+          font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        .vd-preview[hidden] { display: none; }
+        .vd-preview__backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(15, 23, 42, .7);
+          backdrop-filter: blur(3px);
+        }
+        .vd-preview__dialog {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          width: min(840px, calc(100vw - 32px));
+          max-height: calc(100dvh - 32px);
+          box-sizing: border-box;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, .1);
+          border-radius: 14px;
+          background: #fff;
+          box-shadow: 0 24px 80px rgba(0, 0, 0, .32);
+        }
+        .vd-preview__header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 12px 16px;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        .vd-preview__title {
+          min-width: 0;
+          margin: 0;
+          overflow: hidden;
+          color: #111827;
+          font-size: 14px;
+          font-weight: 600;
+          line-height: 1.5;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .vd-preview__close {
+          display: grid;
+          flex: 0 0 32px;
+          place-items: center;
+          width: 32px;
+          height: 32px;
+          padding: 0;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          background: #fff;
+          color: #475569;
+          font-size: 22px;
+          line-height: 1;
+          cursor: pointer;
+        }
+        .vd-preview__close:hover { background: #f8fafc; color: #0f172a; }
+        .vd-preview__close:focus-visible { outline: 3px solid #c7d2fe; }
+        .vd-preview__stage {
+          display: flex;
+          min-height: 120px;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          background: #0b1020;
+        }
+        .vd-preview__video {
+          display: block;
+          width: 100%;
+          height: min(62dvh, 540px);
+          max-height: calc(100dvh - 145px);
+          object-fit: contain;
+          background: #0b1020;
+        }
+        .vd-preview__video[hidden], .vd-preview__message[hidden] { display: none; }
+        .vd-preview__message {
+          margin: 0;
+          padding: 36px 24px;
+          color: #e2e8f0;
+          font-size: 13px;
+          line-height: 1.7;
+          text-align: center;
+        }
+        .vd-preview__note {
+          margin: 0;
+          padding: 11px 16px 14px;
+          color: #94a3b8;
+          font-size: 11px;
+          line-height: 1.6;
+        }
       </style>
       <div class="vd-panel" id="vd-panel">
         <div class="vd-panel__bar" id="vd-bar">
@@ -558,6 +662,22 @@
         <div class="vd-panel__body">
           <div class="vd-panel__loading" id="vd-loading">正在加载…</div>
         </div>
+      </div>
+      <div class="vd-preview" id="vd-preview" role="dialog" aria-modal="true"
+        aria-labelledby="vd-preview-title" hidden>
+        <div class="vd-preview__backdrop" id="vd-preview-backdrop"></div>
+        <section class="vd-preview__dialog" aria-label="视频预览播放器">
+          <header class="vd-preview__header">
+            <h2 class="vd-preview__title" id="vd-preview-title">视频预览</h2>
+            <button class="vd-preview__close" id="vd-preview-close" type="button" aria-label="关闭预览">×</button>
+          </header>
+          <div class="vd-preview__stage">
+            <video class="vd-preview__video" id="vd-preview-video" controls
+              playsinline preload="metadata" tabindex="0"></video>
+            <p class="vd-preview__message" id="vd-preview-message" hidden></p>
+          </div>
+          <p class="vd-preview__note">视频预览使用网站提供的播放地址，部分加密流或限制外链的视频可能无法播放。</p>
+        </section>
       </div>
     `;
 
@@ -595,6 +715,7 @@
     shadow.querySelector("#vd-close").addEventListener("click", () => hidePanel());
 
     enableDrag(shadow);
+    enableVideoPreview(shadow);
     window.addEventListener("resize", () => {
       if (host?.style.display !== "none") updatePanelHeight(shadow);
     });
@@ -693,6 +814,129 @@
     bar.addEventListener("pointercancel", finishDrag);
   }
 
+  /**
+   * Permit only normal remote media URLs; never insert page-supplied markup.
+   * @param {*} value Media or thumbnail URL.
+   * @returns {string} HTTP(S) URL or an empty string.
+   */
+  function safePreviewUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  /**
+   * Show a clear error in the preview overlay when the source cannot play.
+   * @param {string} text Explanatory error message.
+   * @returns {void}
+   */
+  function showPreviewMessage(text) {
+    const shadow = host?.shadowRoot;
+    const video = shadow?.querySelector("#vd-preview-video");
+    const message = shadow?.querySelector("#vd-preview-message");
+    if (!video || !message) return;
+    video.pause();
+    video.hidden = true;
+    message.textContent = text;
+    message.hidden = false;
+  }
+
+  /**
+   * Remove media references and return keyboard focus to the panel preview button.
+   * @returns {void}
+   */
+  function closeVideoPreview() {
+    const shadow = host?.shadowRoot;
+    const overlay = shadow?.querySelector("#vd-preview");
+    const video = shadow?.querySelector("#vd-preview-video");
+    if (!overlay || overlay.hidden || !video) return;
+    overlay.hidden = true;
+    video.pause();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.load();
+    sendToPanel({ type: "preview_closed", shareUrl: activePreviewShareUrl });
+    activePreviewShareUrl = "";
+  }
+
+  /**
+   * Open a viewport-level dialog rather than constraining playback to the iframe.
+   * @param {string} shareUrl Media identifier reported by the panel.
+   * @returns {void}
+   */
+  function openVideoPreview(shareUrl) {
+    const item = buildPanelItems().find((entry) => entry.shareUrl === shareUrl);
+    if (!item || !host?.shadowRoot) return;
+    const shadow = host.shadowRoot;
+    const overlay = shadow.querySelector("#vd-preview");
+    const video = shadow.querySelector("#vd-preview-video");
+    const message = shadow.querySelector("#vd-preview-message");
+    const close = shadow.querySelector("#vd-preview-close");
+    activePreviewShareUrl = shareUrl;
+    video.pause();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.load();
+    shadow.querySelector("#vd-preview-title").textContent = item.title || "视频预览";
+    const poster = safePreviewUrl(item.cover);
+    if (poster) video.poster = poster;
+    video.hidden = false;
+    message.hidden = true;
+    overlay.hidden = false;
+    close.focus();
+
+    const source = safePreviewUrl(item.previewUrl);
+    if (!source) {
+      showPreviewMessage("该视频没有可用的预览地址。");
+      return;
+    }
+    if (isPlaylistUrl(source) && !video.canPlayType("application/vnd.apple.mpegurl")) {
+      showPreviewMessage("浏览器暂不支持直接预览此 HLS (m3u8) 视频流，请下载后播放。");
+      return;
+    }
+    video.src = source;
+    video.load();
+    video.play().catch(() => {});
+  }
+
+  /**
+   * Set up backdrop, playback errors and keyboard access outside the panel iframe.
+   * @param {ShadowRoot} shadow Host's shadow root.
+   * @returns {void}
+   */
+  function enableVideoPreview(shadow) {
+    const overlay = shadow.querySelector("#vd-preview");
+    const close = shadow.querySelector("#vd-preview-close");
+    const video = shadow.querySelector("#vd-preview-video");
+    shadow.querySelector("#vd-preview-backdrop").addEventListener("click", closeVideoPreview);
+    close.addEventListener("click", closeVideoPreview);
+    video.addEventListener("error", () => {
+      if (!overlay.hidden && !video.hidden) {
+        showPreviewMessage("视频源无法播放，可能已失效、格式不受支持或网站限制直接播放。");
+      }
+    });
+    window.addEventListener("keydown", (event) => {
+      if (overlay.hidden) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeVideoPreview();
+      } else if (event.key === "Tab") {
+        const targets = [close, video].filter((node) => !node.hidden);
+        const index = targets.indexOf(shadow.activeElement);
+        if (index === -1 || (!event.shiftKey && index === targets.length - 1)) {
+          event.preventDefault();
+          targets[0].focus();
+        } else if (event.shiftKey && index === 0) {
+          event.preventDefault();
+          targets[targets.length - 1].focus();
+        }
+      }
+    }, true);
+  }
+
   async function restorePanelPosition(shadow) {
     if (extensionSettings.rememberPanelPosition === false) return;
     const data = await chrome.storage.local.get(PANEL_POSITION_KEY);
@@ -722,6 +966,7 @@
   }
 
   function hidePanel() {
+    closeVideoPreview();
     if (host) host.style.display = "none";
   }
 
@@ -802,7 +1047,7 @@
   window.addEventListener("message", (event) => {
     const data = event.data;
     if (!data || typeof data !== "object") return;
-    if (data.source !== "vd-panel") return;
+    if (data.source !== "vd-panel" || event.source !== panelFrame?.contentWindow) return;
 
     switch (data.type) {
       case "panel_ready":
@@ -819,6 +1064,9 @@
         break;
       case "stop_download":
         stopBatchDownload();
+        break;
+      case "open_preview":
+        if (typeof data.shareUrl === "string") openVideoPreview(data.shareUrl);
         break;
       default:
         break;
