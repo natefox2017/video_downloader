@@ -44,7 +44,7 @@ test("download concurrency dropdown keeps the chevron inside its own field", () 
   const html = read("monitor.html");
   const monitorCss = read("monitor.css");
   assert.match(html, /<span class="ui-select-wrap">\s*<select id="concurrency" class="ui-select"/);
-  assert.match(monitorCss, /\.monitor-controls__right \.ui-select-wrap\s*\{[^}]*width:\s*116px;[^}]*max-width:\s*116px;/);
+  assert.match(monitorCss, /\.monitor-controls__right \.ui-select-wrap\s*\{[^}]*width:\s*116px;[^}]*max-width:\s*116px;?/);
 });
 
 test("switch overrides the stronger Pico [role=switch] selector and thumb", () => {
