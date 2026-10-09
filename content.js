@@ -177,6 +177,93 @@
     );
   }
 
+
+  /* Verify actual response bytes before admitting an item to either UI. */
+  const mediaProbeCache = new Map();
+  const mediaProbeQueue = [];
+  let activeMediaProbes = 0;
+
+  /**
+   * Keep privileged cross-origin validation in the extension service worker.
+   * Chrome MV3 content-script fetch() remains subject to the page's CORS rules.
+   * @param {string} url Candidate media URL.
+   * @returns {Promise<object|null>} Verified media metadata.
+   */
+  async function probeMediaUrl(url) {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "probe_media_url", url });
+      return response?.ok ? response.media : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /** Bound network probes globally per tab, with one in-flight probe per URL. */
+  function queueMediaProbe(url) {
+    const cached = mediaProbeCache.get(url);
+    if (cached && Date.now() - cached.time < 45_000) return cached.promise;
+    const promise = new Promise((resolve) => {
+      mediaProbeQueue.push({ url, resolve });
+      drainMediaProbes();
+    });
+    mediaProbeCache.set(url, { promise, time: Date.now() });
+    return promise;
+  }
+
+  /** Dispatch only a few 16 KiB probes at a time to avoid slowing the page. */
+  function drainMediaProbes() {
+    while (activeMediaProbes < DOWNLOAD_RULES.MEDIA_PROBE_CONCURRENCY && mediaProbeQueue.length) {
+      const job = mediaProbeQueue.shift();
+      activeMediaProbes++;
+      probeMediaUrl(job.url).then(job.resolve, () => job.resolve(null)).finally(() => {
+        activeMediaProbes--;
+        drainMediaProbes();
+      });
+    }
+  }
+
+  /**
+   * A gallery, audio URL, or unverified source must not become a selectable
+   * video. Reject stale asynchronous results when a new extractor URL arrives.
+   * @param {object} media Internal mutable media record.
+   * @returns {void}
+   */
+  function verifyMediaRecord(media) {
+    const candidates = downloadCandidateUrls(media)
+      .filter((url) => safePreviewUrl(url) && !shouldIgnoreUrl(url))
+      .filter((url) => sourceIsExtractor(media.source) || isWorthCollecting(url))
+      .slice(0, 4);
+    const signature = media.type === "图集" ? "" : candidates.join("\n");
+    if (media.verificationSignature === signature && media.verificationState) return;
+    media.verificationSignature = signature;
+    media.verificationState = "pending";
+    media.verifiedUrl = "";
+    const generation = (media.verificationGeneration || 0) + 1;
+    media.verificationGeneration = generation;
+
+    if (!signature) {
+      media.verificationState = "rejected";
+      return;
+    }
+
+    (async () => {
+      let verified = null;
+      for (const url of candidates) {
+        verified = await queueMediaProbe(url);
+        if (media.verificationGeneration !== generation) return;
+        if (verified) break;
+      }
+      if (media.verificationGeneration !== generation) return;
+      media.verificationState = verified ? "verified" : "rejected";
+      if (verified) {
+        media.verifiedUrl = verified.url;
+        media.verifiedKind = verified.kind;
+        if (verified.size > 0) media.verifiedSize = verified.size;
+      }
+      pushMediaList();
+    })().catch((error) => console.warn("[视频下载] 媒体验证失败：", error));
+  }
+
   /**
    * 媒体入库（去重 + 合并）。
    * 抓取脚本上报的元数据最丰富，嗅探到的只有 URL：同一条目多次出现时，
@@ -234,6 +321,7 @@
         }
       }
 
+      verifyMediaRecord(existing);
       pushMediaList();
       return;
     }
@@ -264,6 +352,7 @@
     if (!item.fileName) {
       item.fileName = buildFileName(item.platform || currentPlatform.name, item.author, item.title);
     }
+    verifyMediaRecord(item);
     pushMediaList();
   }
 
@@ -290,7 +379,9 @@
     if (!url) return false;
     if (url.startsWith("blob:") || url.startsWith("data:")) return false; // 临时地址，无法下载
     if (shouldIgnoreUrl(url)) return false; // 广告 / 埋点 / 缩略图
-    return true;
+    // Playback fragments and audio are not independently downloadable videos.
+    if (/\.(?:ts|m4s|m4a|mp3|aac|wav|ogg|vtt|jpg|jpeg|png|webp)(?:[?#]|$)/i.test(url)) return false;
+    return /^https?:\/\//i.test(url);
   }
 
   /** 从 <video> 元素收集候选地址 */
@@ -388,6 +479,7 @@
   let host = null;
   let panelFrame = null;
   let activePreviewShareUrl = "";
+  let previewTimeoutId = null;
   const panelState = { collapsed: false, contentHeight: 144, suppressToggleClickUntil: 0 };
 
   function buildPanel() {
@@ -838,6 +930,7 @@
     const video = shadow?.querySelector("#vd-preview-video");
     const message = shadow?.querySelector("#vd-preview-message");
     if (!video || !message) return;
+    clearTimeout(previewTimeoutId);
     video.pause();
     video.hidden = true;
     message.textContent = text;
@@ -854,6 +947,7 @@
     const video = shadow?.querySelector("#vd-preview-video");
     if (!overlay || overlay.hidden || !video) return;
     overlay.hidden = true;
+    clearTimeout(previewTimeoutId);
     video.pause();
     video.removeAttribute("src");
     video.removeAttribute("poster");
@@ -893,12 +987,17 @@
       showPreviewMessage("该视频没有可用的预览地址。");
       return;
     }
-    if (isPlaylistUrl(source) && !video.canPlayType("application/vnd.apple.mpegurl")) {
+    if (item.isHls && !video.canPlayType("application/vnd.apple.mpegurl")) {
       showPreviewMessage("浏览器暂不支持直接预览此 HLS (m3u8) 视频流，请下载后播放。");
       return;
     }
+    video.preload = "metadata";
     video.src = source;
     video.load();
+    clearTimeout(previewTimeoutId);
+    previewTimeoutId = setTimeout(() => {
+      if (!overlay.hidden && video.readyState < 2) showPreviewMessage("预览加载超时。视频已经验证，可尝试下载后播放。");
+    }, 12_000);
     video.play().catch(() => {});
   }
 
@@ -913,6 +1012,7 @@
     const video = shadow.querySelector("#vd-preview-video");
     shadow.querySelector("#vd-preview-backdrop").addEventListener("click", closeVideoPreview);
     close.addEventListener("click", closeVideoPreview);
+    video.addEventListener("loadeddata", () => clearTimeout(previewTimeoutId));
     video.addEventListener("error", () => {
       if (!overlay.hidden && !video.hidden) {
         showPreviewMessage("视频源无法播放，可能已失效、格式不受支持或网站限制直接播放。");
@@ -975,15 +1075,16 @@
   /* ================================================================== */
 
   function buildPanelItems() {
-    return mediaList.map((item) => {
+    return mediaList.filter((item) => item.verificationState === "verified").map((item) => {
       const variant = preferredVariant(item);
       return {
         shareUrl: item.shareUrl,
         title: item.title,
         author: item.author,
         cover: item.cover,
-        previewUrl: variant?.url || item.videoUrl || (Array.isArray(item.videoUrls) ? item.videoUrls[0] : "") || "",
-        size: variant?.size || item.size,
+        previewUrl: item.verifiedUrl || "",
+        isHls: item.verifiedKind === "hls",
+        size: item.verifiedSize || (variant?.url === item.verifiedUrl ? variant?.size : 0) || item.size,
         quality: variant?.label || "",
         type: item.type,
         platform: item.platform || currentPlatform.name,
@@ -1012,6 +1113,7 @@
       title: item.title,
       cover: item.cover,
       previewUrl: item.previewUrl,
+      isHls: item.isHls,
       size: item.size,
       quality: item.quality,
       platform: item.platform,
@@ -1029,7 +1131,7 @@
 
   function pushMediaList() {
     const items = buildPanelItems();
-    sendToPanel({ type: "media_list", items });
+    sendToPanel({ type: "media_list", items, validating: mediaList.some((item) => item.verificationState === "pending") });
     publishRegistry(items);
   }
 
@@ -1051,7 +1153,7 @@
 
     switch (data.type) {
       case "panel_ready":
-        sendToPanel({ type: "media_list", items: buildPanelItems() });
+        sendToPanel({ type: "media_list", items: buildPanelItems(), validating: mediaList.some((item) => item.verificationState === "pending") });
         break;
       case "panel_resize":
         if (Number.isFinite(data.height) && data.height > 0) {
@@ -1120,11 +1222,16 @@
 
     // The manual limit is per originating tab; memory pressure can reduce it.
     const setting = requestedConcurrency == null ? extensionSettings.batchConcurrency : requestedConcurrency;
+    // A known 465 MB video should not be fetched alongside several similar Blobs.
+    const largestKnown = Math.max(0, ...sizes);
+    const inflightLimit = largestKnown > 0
+      ? Math.max(1, Math.floor(DOWNLOAD_RULES.MAX_INFLIGHT_MEDIA_BYTES / largestKnown))
+      : 2;
     const manualLimit = Number(setting) > 0
       ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(Number(setting))))
       : MAX_CONCURRENCY;
     return {
-      threads: Math.min(manualLimit, Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw))),
+      threads: Math.min(manualLimit, inflightLimit, Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw))),
       usableBytes: Math.round(usableBytes),
       perVideo,
       sizeSampled: sizes.length > 0,
@@ -1167,42 +1274,88 @@
     return (bytes / Math.pow(1024, index)).toFixed(2) + " " + units[index];
   }
 
-  /** 带进度回调的下载（fetch → Blob）；进度按 2% 步进回调 */
-  async function fetchWithProgress(url, onProgress, timeoutMs = 120000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, { credentials: "omit", signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  /** Controllers allow Stop to cancel active fetches, not only queued workers. */
+  const activeDownloadControllers = new Set();
 
-      const total = Number(response.headers.get("content-length")) || 0;
-      if (!response.body || !onProgress) {
-        const blob = await response.blob();
-        clearTimeout(timer);
-        return blob;
+  /**
+   * A rolling idle timeout aborts stalled transfers without cutting off
+   * healthy large videos after an arbitrary two-minute wall-clock limit.
+   * The response type and initial bytes are checked before retaining data.
+   * @param {string} url Direct media URL.
+   * @param {Function|null} onProgress Progress callback (0..99 until saved).
+   * @param {number} timeoutMs Max inactivity between chunks.
+   * @param {"video"|"auxiliary"} expectedKind Whether to require video bytes.
+   * @returns {Promise<Blob>} Verified downloaded media data.
+   */
+  async function fetchWithProgress(url, onProgress, timeoutMs = DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS, expectedKind = "video") {
+    const controller = new AbortController();
+    activeDownloadControllers.add(controller);
+    let timeoutId;
+    let timedOut = false;
+    const renewIdleTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+    };
+    renewIdleTimer();
+    try {
+      if (downloadTask.stopped) throw new Error("用户已停止");
+      const response = await fetch(url, { credentials: "omit", signal: controller.signal });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const mime = response.headers.get("content-type") || "";
+      if (expectedKind === "video" && isRejectedMediaMimeType(mime)) throw new Error("服务器返回非视频内容：" + mime);
+      if (expectedKind !== "video" && /^(text\/|application\/(json|xml|xhtml))/i.test(mime)) {
+        throw new Error("服务器没有返回可下载媒体");
       }
 
+      const total = Number(response.headers.get("content-length")) || 0;
+      if (!response.body) throw new Error("视频响应没有可读取的数据流");
       const reader = response.body.getReader();
       const chunks = [];
       let loaded = 0;
       let lastPercent = -1;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-        const percent = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 95;
-        if (percent - lastPercent >= 2 || percent >= 99) {
-          lastPercent = percent;
-          onProgress(percent);
+      let firstChunk = true;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          renewIdleTimer();
+          if (firstChunk) {
+            firstChunk = false;
+            if (expectedKind === "video") {
+              const signature = sniffVideoSignature(value);
+              if (signature === "invalid" || (signature !== "video" && !isVideoMimeType(mime))) {
+                throw new Error("响应内容不是有效视频");
+              }
+            }
+          }
+          chunks.push(value);
+          loaded += value.byteLength;
+          if (total && onProgress) {
+            const percent = Math.min(99, Math.floor((loaded / total) * 100));
+            if (percent - lastPercent >= 2) {
+              lastPercent = percent;
+              onProgress(percent);
+            }
+          }
         }
+      } catch (error) {
+        reader.cancel().catch(() => {});
+        throw error;
       }
-      clearTimeout(timer);
-      return new Blob(chunks, { type: response.headers.get("content-type") || "application/octet-stream" });
+      if (loaded < DOWNLOAD_RULES.MIN_VALID_BYTES) throw new Error("视频内容为空或不完整");
+      return new Blob(chunks, { type: mime || "application/octet-stream" });
     } catch (error) {
-      clearTimeout(timer);
-      if (error.name === "AbortError") throw new Error("下载超时（120秒无响应）");
+      if (controller.signal.aborted && downloadTask.stopped) throw new Error("用户已停止");
+      if (timedOut || error.name === "AbortError") {
+        throw new Error("下载停滞：" + Math.round(timeoutMs / 1000) + " 秒未收到数据");
+      }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      activeDownloadControllers.delete(controller);
     }
   }
 
@@ -1245,17 +1398,29 @@
     return false;
   }
 
-  /** 依次尝试视频的所有候选地址，返回第一个下载成功的 Blob */
+  /**
+   * Prefer the already verified URL; verify alternate CDNs before downloading.
+   * @param {object} media Validated media entry.
+   * @param {Function} onProgress Progress callback.
+   * @returns {Promise<{blob: Blob, url: string}>} Successful payload and origin.
+   */
   async function fetchVideoWithFallback(media, onProgress) {
-    const candidates = downloadCandidateUrls(media);
+    const candidates = [...new Set([media.verifiedUrl, ...downloadCandidateUrls(media)].filter(Boolean))];
     let lastError = null;
 
     for (const url of candidates) {
+      if (downloadTask.stopped) throw new Error("用户已停止");
       try {
+        if (url !== media.verifiedUrl) {
+          const proof = await queueMediaProbe(url);
+          if (!proof || proof.kind !== "video") throw new Error("候选地址不是有效视频");
+        }
+        onProgress?.(0);
         const blob = await fetchWithProgress(url, onProgress);
         if (blob.size < DOWNLOAD_RULES.MIN_VALID_BYTES) throw new Error("文件内容为空");
-        return blob;
+        return { blob, url };
       } catch (error) {
+        if (downloadTask.stopped) throw error;
         lastError = error;
         console.warn("[视频下载] 该地址下载失败，改用下一个候选地址：", url, error);
       }
@@ -1387,7 +1552,9 @@
    * @returns {Promise<{blob: Blob, ext: string}>}
    */
   async function downloadM3u8(media, onProgress) {
-    const playlistUrl = (media.videoUrls || []).find((url) => isPlaylistUrl(url)) || media.videoUrl;
+    const playlistUrl = media.verifiedKind === "hls"
+      ? media.verifiedUrl
+      : (media.videoUrls || []).find((url) => isPlaylistUrl(url)) || media.videoUrl;
     if (!playlistUrl) throw new Error("没有可用的播放列表地址");
 
     // 1) 取播放列表；主列表则选最高码率
@@ -1400,7 +1567,8 @@
       playlistText = await fetchTextWithTimeout(variantUrl, DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS);
     }
 
-    // 2) 解析分段
+    // 2) Only a valid HLS video manifest can enter the segment download path.
+    if (!isHlsVideoPlaylist(playlistText)) throw new Error("播放列表不是有效视频");
     const { segments, initUrl } = parseMediaPlaylist(playlistText, playlistBase);
     if (!segments.length) throw new Error("播放列表中没有找到视频分段");
 
@@ -1424,7 +1592,7 @@
         }
         parts[index] = buffer;
         completed++;
-        if (onProgress) onProgress(Math.floor((completed / total) * 100));
+        if (onProgress) onProgress(Math.min(99, Math.floor((completed / total) * 100)));
       }
     }
 
@@ -1450,7 +1618,7 @@
       status: media.status,
       progress: media.progress || 0,
     });
-    if (status === "done" || status === "error") {
+    if (status === "done" || status === "error" || status === "idle") {
       if (registryProgressTimer) clearTimeout(registryProgressTimer);
       registryProgressTimer = null;
       pushMediaList();
@@ -1473,7 +1641,8 @@
 
     try {
       // ---- m3u8：分段下载后合并 ----
-      const playlistUrl = (media.videoUrls || []).find((url) => isPlaylistUrl(url));
+      const playlistUrl = media.verifiedKind === "hls"
+        ? media.verifiedUrl : (media.videoUrls || []).find((url) => isPlaylistUrl(url));
       if (playlistUrl || isPlaylistUrl(media.videoUrl)) {
         const { blob, ext } = await downloadM3u8(media, (percent) => {
           reportItemStatus(media, "downloading", percent);
@@ -1489,7 +1658,7 @@
           const blob = await fetchWithProgress(media.imageUrls[index], (percent) => {
             const overall = Math.floor(((index + percent / 100) / media.imageUrls.length) * 100);
             reportItemStatus(media, "downloading", overall);
-          });
+          }, DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS, "auxiliary");
           const ext = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
           saveBlob(blob, `${media.fileName}_${index + 1}.${ext}`);
         }
@@ -1498,11 +1667,12 @@
       }
 
       // ---- 直链视频：依次尝试候选地址 ----
-      const videoBlob = await fetchVideoWithFallback(media, (percent) => {
-        reportItemStatus(media, "downloading", Math.floor(percent * 0.9));
+      const { blob: videoBlob, url: downloadedUrl } = await fetchVideoWithFallback(media, (percent) => {
+        reportItemStatus(media, "downloading", percent);
       });
-      const ext = guessMediaExt(media.videoUrl) || "mp4";
-      const saveExt = ext === "m3u8" ? "mp4" : ext;
+      reportItemStatus(media, "finalizing", 99);
+      const ext = guessMediaExt(downloadedUrl) || "mp4";
+      const saveExt = ext === "m3u8" || ext === "m4s" ? "mp4" : ext;
       saveBlob(videoBlob, `${media.fileName}.${saveExt}`);
 
       // ---- 音轨检测（仅提示用） ----
@@ -1510,7 +1680,7 @@
         if (!hasAudioTrack(await videoBlob.slice(0, AUDIO_PROBE_BYTES).arrayBuffer())) {
           console.warn("[视频下载] 当前视频源未检测到音轨");
           if (media.audioUrl) {
-            const audioBlob = await fetchWithProgress(media.audioUrl, null);
+            const audioBlob = await fetchWithProgress(media.audioUrl, null, DOWNLOAD_RULES.DIRECT_IDLE_TIMEOUT_MS, "auxiliary");
             const isM4a = /mp4|m4a|aac/i.test(audioBlob.type || "");
             saveBlob(audioBlob, `${media.fileName}_配乐.${isM4a ? "m4a" : "mp3"}`);
             sendToPanel({ type: "toast", message: "该视频源不含音轨，已同时保存配乐文件" });
@@ -1523,6 +1693,10 @@
       reportItemStatus(media, "done", 100);
       return true;
     } catch (error) {
+      if (downloadTask.stopped && String(error.message || error) === "用户已停止") {
+        reportItemStatus(media, "idle", 0);
+        return false;
+      }
       console.error("[视频下载] 下载失败：", error);
       reportItemStatus(media, "error", 0);
       sendToPanel({ type: "item_error", shareUrl: media.shareUrl, message: String(error.message || error) });
@@ -1539,7 +1713,7 @@
 
     const targets = [...new Set(shareUrls)]
       .map((url) => mediaList.find((item) => item.shareUrl === url))
-      .filter((item) => item && item.status !== "done" && item.status !== "downloading");
+      .filter((item) => item && item.verificationState === "verified" && item.status !== "done" && item.status !== "downloading");
 
     if (!targets.length) {
       sendToPanel({ type: "toast", message: "没有需要下载的视频（已完成的不再重复下载）" });
@@ -1598,6 +1772,7 @@
 
   function stopBatchDownload() {
     downloadTask.stopped = true;
+    for (const controller of activeDownloadControllers) controller.abort();
   }
 
   /* ================================================================== */
@@ -1624,7 +1799,7 @@
       }
       const shareUrls = Array.isArray(message.shareUrls) ? [...new Set(message.shareUrls)] : [];
       const available = shareUrls.filter((url) =>
-        mediaList.some((item) => item.shareUrl === url && item.status !== "done")
+        mediaList.some((item) => item.shareUrl === url && item.verificationState === "verified" && item.status !== "done")
       );
       if (!available.length) {
         sendResponse({ ok: false, error: "该网页没有待下载的视频" });

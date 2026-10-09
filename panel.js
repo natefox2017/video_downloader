@@ -12,6 +12,7 @@
     items: [],
     selected: new Set(),
     downloading: false,
+    validating: false,
     batch: { completed: 0, total: 0 },
   };
 
@@ -58,6 +59,7 @@
 
   function stateText(item) {
     if (item.status === "downloading") return item.progress > 0 ? item.progress + "%" : "下载中";
+    if (item.status === "finalizing") return "保存中";
     if (item.status === "done") return "已完成";
     if (item.status === "error") return "失败";
     return "";
@@ -66,7 +68,7 @@
   function stateClass(item) {
     if (item.status === "done") return "row__state is-done";
     if (item.status === "error") return "row__state is-error";
-    if (item.status === "downloading") return "row__state is-downloading";
+    if (item.status === "downloading" || item.status === "finalizing") return "row__state is-downloading";
     return "row__state";
   }
 
@@ -74,6 +76,7 @@
     const single = state.items.length === 1;
     document.body.classList.toggle("is-single", single);
     emptyEl.classList.toggle("hidden", state.items.length > 0);
+    emptyEl.querySelector("p").textContent = state.validating ? "正在验证视频来源…" : "还没有识别到视频";
 
     listEl.innerHTML = state.items.map((item) => {
       const selected = state.selected.has(item.shareUrl);
@@ -266,6 +269,7 @@
       case "panel_init": {
         const previous = new Set(state.items.map((item) => item.shareUrl));
         state.items = message.items || [];
+        state.validating = !!message.validating;
 
         state.items.forEach((item) => {
           if (isDone(item)) state.selected.delete(item.shareUrl);
