@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const ASSET_DIRECTORIES = ["extractors", "images", "vendor", "_locales", "assets", "fonts"];
 const SOURCE_FILE_PATTERN = /\.(?:js|css|html)$/i;
+const RELEASE_TEXT_FILES = new Set(["manifest.json", "LICENSE", "THIRD_PARTY_NOTICES.md"]);
 
 /**
  * Parse a Git tag into a Chrome-compatible, three- or four-part version.
@@ -128,7 +129,7 @@ export function stageExtension(sourceRoot, targetRoot, tag) {
   for (const entry of fs.readdirSync(sourceRoot)) {
     const from = path.join(sourceRoot, entry);
     const stat = fs.lstatSync(from);
-    if (stat.isFile() && (entry === "manifest.json" || SOURCE_FILE_PATTERN.test(entry))) {
+    if (stat.isFile() && (RELEASE_TEXT_FILES.has(entry) || SOURCE_FILE_PATTERN.test(entry))) {
       copySafe(from, path.join(targetRoot, entry));
     }
   }

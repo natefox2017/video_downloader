@@ -46,6 +46,8 @@ function fixture() {
   fs.writeFileSync(path.join(source, "vendor/pico.min.css"), "/* Pico */");
   fs.writeFileSync(path.join(source, "extractors/common.js"), "/* extractor */");
   fs.writeFileSync(path.join(source, "README.md"), "Do not package docs.");
+  fs.writeFileSync(path.join(source, "LICENSE"), "MIT License");
+  fs.writeFileSync(path.join(source, "THIRD_PARTY_NOTICES.md"), "Pico CSS MIT License");
   fs.writeFileSync(path.join(source, "key.pem"), "This must NEVER ship.");
   fs.mkdirSync(path.join(source, "tests"));
   fs.writeFileSync(path.join(source, "tests/secret.txt"), "do not ship");
@@ -76,7 +78,7 @@ test("staging ships all settings, monitor, Pico and extension assets, but never 
   assert.equal(original.version, "9.9.9");
   for (const included of ["options.html", "options.js", "monitor.html", "monitor.js", "panel.html",
     "background.js", "rules.js", "content.js", "vendor/pico.min.css",
-    "images/logo.svg", "images/16.png", "extractors/common.js"]) {
+    "images/logo.svg", "images/16.png", "extractors/common.js", "LICENSE", "THIRD_PARTY_NOTICES.md"]) {
     assert.ok(fs.existsSync(path.join(target, included)), included);
   }
   for (const excluded of ["README.md", "key.pem", "tests", ".github", "scripts"]) {

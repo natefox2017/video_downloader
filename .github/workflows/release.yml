@@ -105,7 +105,7 @@ jobs:
           unzip -tq "$zip"
 
           # ZIP must contain manifest at the archive root and all standalone UI pages.
-          for file in manifest.json options.html options.js monitor.html monitor.js vendor/pico.min.css images/logo.svg; do
+          for file in manifest.json options.html options.js monitor.html monitor.js vendor/pico.min.css images/logo.svg LICENSE THIRD_PARTY_NOTICES.md; do
             unzip -Z1 "$zip" | grep -Fqx "$file" || {
               echo "::error::Missing packaged file: $file"
               exit 1
