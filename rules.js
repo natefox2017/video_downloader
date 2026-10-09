@@ -28,23 +28,46 @@
  * 未命中任何平台的页面走“通用”流程：DOM 扫描 + 资源嗅探。
  */
 const PLATFORMS = [
-  { id: "douyin",      name: "抖音",     hosts: ["douyin.com"],                    extractor: "extractors/douyin.js" },
-  { id: "kuaishou",    name: "快手",     hosts: ["kuaishou.com", "kwimgs.com"],     extractor: "extractors/kuaishou.js" },
-  { id: "bilibili",    name: "哔哩哔哩", hosts: ["bilibili.com", "bilivideo.com"],  extractor: "extractors/bilibili.js" },
-  { id: "weibo",       name: "微博",     hosts: ["weibo.com"],                      extractor: "extractors/weibo.js" },
-  { id: "xiaohongshu", name: "小红书",   hosts: ["xiaohongshu.com", "xhslink.com"],  extractor: "extractors/xiaohongshu.js" },
-  { id: "xigua",       name: "西瓜视频", hosts: ["ixigua.com"],                     extractor: null }, // 暂无专用抓取，走通用嗅探
-  { id: "youtube",     name: "YouTube",  hosts: ["youtube.com", "youtu.be"],        extractor: "extractors/youtube.js" },
-  { id: "tiktok",      name: "TikTok",   hosts: ["tiktok.com"],                     extractor: "extractors/tiktok.js" },
-  { id: "vimeo",       name: "Vimeo",    hosts: ["vimeo.com", "player.vimeo.com"],  extractor: "extractors/vimeo.js" },
-  { id: "twitch",      name: "Twitch",   hosts: ["twitch.tv"],                      extractor: "extractors/twitch.js" },
-  { id: "instagram",   name: "Instagram", hosts: ["instagram.com"],                 extractor: "extractors/instagram.js" },
-  { id: "facebook",    name: "Facebook", hosts: ["facebook.com", "fb.watch"],      extractor: "extractors/facebook.js" },
-  { id: "twitter",     name: "X",        hosts: ["twitter.com", "x.com"],           extractor: "extractors/twitter.js" },
+  { id: "douyin",      name: "抖音",      hosts: ["douyin.com"],                    extractor: "extractors/douyin.js",      defaultStrategy: "extractor" },
+  { id: "kuaishou",    name: "快手",      hosts: ["kuaishou.com", "kwimgs.com"],     extractor: "extractors/kuaishou.js",    defaultStrategy: "extractor" },
+  { id: "bilibili",    name: "哔哩哔哩",  hosts: ["bilibili.com", "bilivideo.com"],  extractor: "extractors/bilibili.js",    defaultStrategy: "extractor" },
+  { id: "weibo",       name: "微博",      hosts: ["weibo.com"],                      extractor: "extractors/weibo.js",       defaultStrategy: "extractor" },
+  { id: "xiaohongshu", name: "小红书",    hosts: ["xiaohongshu.com", "xhslink.com"],  extractor: "extractors/xiaohongshu.js", defaultStrategy: "extractor" },
+  { id: "xigua",       name: "西瓜视频",  hosts: ["ixigua.com"],                     extractor: null,                         defaultStrategy: "sniff" },
+  { id: "youtube",     name: "YouTube",   hosts: ["youtube.com", "youtu.be"],        extractor: "extractors/youtube.js",     defaultStrategy: "extractor" },
+  { id: "tiktok",      name: "TikTok",    hosts: ["tiktok.com"],                     extractor: "extractors/tiktok.js",      defaultStrategy: "extractor" },
+  { id: "vimeo",       name: "Vimeo",     hosts: ["vimeo.com", "player.vimeo.com"],  extractor: "extractors/vimeo.js",       defaultStrategy: "extractor" },
+  { id: "twitch",      name: "Twitch",    hosts: ["twitch.tv"],                      extractor: "extractors/twitch.js",      defaultStrategy: "extractor" },
+  { id: "instagram",   name: "Instagram", hosts: ["instagram.com"],                  extractor: "extractors/instagram.js",   defaultStrategy: "extractor" },
+  { id: "facebook",    name: "Facebook",  hosts: ["facebook.com", "fb.watch"],       extractor: "extractors/facebook.js",    defaultStrategy: "extractor" },
+  { id: "twitter",     name: "X",         hosts: ["twitter.com", "x.com"],           extractor: "extractors/twitter.js",     defaultStrategy: "extractor" },
 ];
 
 /** 未命中平台时的兜底平台 */
-const GENERIC_PLATFORM = { id: "generic", name: "通用", hosts: [], extractor: null };
+const GENERIC_PLATFORM = { id: "generic", name: "通用", hosts: [], extractor: null, defaultStrategy: "sniff" };
+
+const DEFAULT_SETTINGS = {
+  format: "source",
+  quality: "best",
+  rememberPanelPosition: true,
+  platformStrategies: {},
+};
+
+const DOWNLOAD_STRATEGY_LABELS = {
+  auto: "智能（平台默认）",
+  extractor: "页面解析优先",
+  sniff: "网络嗅探优先",
+};
+
+const QUALITY_LABELS = {
+  best: "最高可用清晰度",
+  "2160": "4K / 2160p 优先",
+  "1440": "1440p 优先",
+  "1080": "1080p 优先",
+  "720": "720p 优先",
+  "480": "480p 优先",
+  smallest: "较小文件优先",
+};
 
 /**
  * 按页面 URL 识别平台。

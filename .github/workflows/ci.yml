@@ -28,7 +28,7 @@ jobs:
       - name: JS syntax check
         run: |
           set -e
-          for f in background.js rules.js content.js panel.js extractors/*.js; do
+          for f in background.js rules.js content.js panel.js options.js extractors/*.js; do
             node --check "$f"
           done
 

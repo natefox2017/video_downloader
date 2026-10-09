@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>视频下载 - 设置</title>
+  <link rel="stylesheet" href="vendor/pico.min.css" />
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <main class="container">
+    <nav>
+      <ul>
+        <li><img class="app-logo" src="images/128.png" alt="" /></li>
+        <li><strong>视频下载</strong> <small id="version"></small></li>
+      </ul>
+      <ul>
+        <li><a href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a></li>
+        <li><a href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">反馈 Bug</a></li>
+      </ul>
+    </nav>
+
+    <section>
+      <h2>下载设置</h2>
+      <div class="settings-grid">
+        <label>
+          视频格式
+          <select id="format">
+            <option value="source">源格式（推荐）</option>
+            <option value="mp4">MP4 优先（有 MP4 源时）</option>
+          </select>
+          <small>插件不转码；这里只改变已有候选源的优先级。</small>
+        </label>
+        <label>
+          默认清晰度
+          <select id="quality"></select>
+          <small>仅在页面实际提供多清晰度源时生效；没有对应清晰度会自动选最接近的可用源。</small>
+        </label>
+      </div>
+      <label>
+        <input id="remember-position" type="checkbox" role="switch" />
+        记住浮动面板位置
+      </label>
+    </section>
+
+    <section>
+      <h2>各平台解析方式</h2>
+      <p><small>“智能”使用该平台当前最可靠的默认方式，同时保留另一种方式作为失败回退。</small></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>平台</th><th>默认方式</th><th>当前设置</th></tr></thead>
+          <tbody id="platform-strategies"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>已检测视频</h2>
+          <p><small>汇总所有当前打开网页标签页检测到的视频，可跨网站一起批量下载。</small></p>
+        </div>
+        <button id="refresh-registry" class="secondary outline" type="button">刷新</button>
+      </div>
+      <div id="registry-empty"><small>暂时没有检测到视频。先在网页里播放视频。</small></div>
+      <div id="registry"></div>
+      <button id="download-selected" type="button" disabled>下载选中的视频</button>
+      <small id="download-status"></small>
+    </section>
+
+    <section>
+      <h2>Bug 反馈</h2>
+      <ol>
+        <li>先在 <code>chrome://extensions/</code> 重新加载插件并刷新问题网页。</li>
+        <li>再次复现问题，记录网站、视频标题和具体表现。</li>
+        <li>如果有报错，把页面控制台或扩展 Service Worker 控制台的错误一起附上。</li>
+        <li>到 GitHub Issues 提交问题；涉及登录/私密页面时不要粘贴 Cookie、Token 或带敏感参数的地址。</li>
+      </ol>
+      <p>
+        <a role="button" class="secondary" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">提交 Bug</a>
+        <a role="button" class="secondary outline" href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">查看源码</a>
+      </p>
+    </section>
+
+    <footer>
+      <small>设置页 UI 基于 Pico CSS 2.1.1（MIT）。</small>
+    </footer>
+  </main>
+  <script src="rules.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -46,12 +46,24 @@
 
     // progressive MP4 直链优先（音画合并），按清晰度降序
     const videoUrls = [];
+    const variants = [];
     const progressive = Array.isArray(files.progressive) ? files.progressive : [];
     const sorted = [...progressive].sort((a, b) => (b.height || 0) - (a.height || 0));
     for (const p of sorted) {
       if (p.url) {
         const text = X.absolutize(p.url);
-        if (text && !videoUrls.includes(text)) videoUrls.push(text);
+        if (text && !videoUrls.includes(text)) {
+          videoUrls.push(text);
+          variants.push({
+            url: text,
+            label: p.quality || (p.height ? p.height + "p" : ""),
+            width: Number(p.width) || 0,
+            height: Number(p.height) || 0,
+            bitrate: Number(p.bitrate) || 0,
+            size: Number(p.size) || 0,
+            mimeType: p.mime || "video/mp4",
+          });
+        }
       }
     }
 
@@ -78,11 +90,12 @@
       author,
       cover: X.absolutize(cover),
       duration: videoData.duration || 0,
-      size: 0,
+      size: variants[0]?.size || 0,
       type: "视频",
       fileName: X.sanitizeFileName(`vimeo_${videoId}_${title.trim()}`.slice(0, 64)) || `vimeo_${videoId}`,
       videoUrl: videoUrls[0],
       videoUrls,
+      variants,
       audioUrl: "",
       imageUrls: [],
     };
