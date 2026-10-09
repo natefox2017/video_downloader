@@ -14,7 +14,7 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
 - **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
 - **Extension icon badge**: shows the number of detected videos on the current tab in real time
-- **Minimal panel UI**: shows only detected video titles, selection when needed, and essential download status
+- **Compact panel UI**: shows video title, file size, a small preview thumbnail, selection when needed, and essential download status
 - **Batch downloads**: newly detected videos are selected automatically; when multiple videos are present, uncheck any you do not want
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
@@ -58,7 +58,8 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 
 | Area | What it does |
 |---|---|
-| Result row | Shows the video title; checkboxes only appear when multiple videos are detected |
+| Result row | Shows a small preview thumbnail, video title, file size, and selection when multiple videos are detected |
+| Preview | Click the thumbnail to open a compact video preview |
 | Bottom bar | Download the selected video(s) or stop the active batch |
 
 ## Supported platforms

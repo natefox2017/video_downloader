@@ -92,17 +92,40 @@
 
     const existing = findMediaByUrl(incoming.shareUrl) || findMediaByUrl(incoming.videoUrl);
     if (existing) {
+      // Dedicated extractors know the real post title/cover; generic sniffing only knows the page.
+      // When both describe the same media URL, prefer extractor metadata instead of keeping a
+      // generic document.title such as "抖音-记录美好生活".
+      const incomingIsExtractor = incoming.source === "页面解析";
+      const existingIsExtractor = existing.source === "页面解析";
+      const preferIncomingMetadata = incomingIsExtractor && !existingIsExtractor;
+
       for (const key of ["title", "desc", "author", "cover", "fileName"]) {
-        if (!existing[key] && incoming[key]) existing[key] = incoming[key];
+        if (incoming[key] && (!existing[key] || preferIncomingMetadata)) existing[key] = incoming[key];
       }
-      if (!existing.size && incoming.size) existing.size = incoming.size;
-      if (!existing.duration && incoming.duration) existing.duration = incoming.duration;
+      if (incoming.size && (!existing.size || preferIncomingMetadata)) existing.size = incoming.size;
+      if (incoming.duration && (!existing.duration || preferIncomingMetadata)) existing.duration = incoming.duration;
+
       const urls = new Set([...(existing.videoUrls || []), ...(incoming.videoUrls || [])]);
       if (incoming.videoUrl) urls.add(incoming.videoUrl);
       existing.videoUrls = [...urls];
       if (!existing.videoUrl && incoming.videoUrl) existing.videoUrl = incoming.videoUrl;
+
       const images = new Set([...(existing.imageUrls || []), ...(incoming.imageUrls || [])]);
       existing.imageUrls = [...images];
+
+      if (preferIncomingMetadata) {
+        existing.shareUrl = incoming.shareUrl || existing.shareUrl;
+        existing.source = incoming.source;
+        existing.platformId = incoming.platformId || existing.platformId;
+        existing.platform = incoming.platform || existing.platform;
+        if (incoming.audioUrl) existing.audioUrl = incoming.audioUrl;
+        if (incoming.originVid) existing.originVid = incoming.originVid;
+        if (downloadedSet.has(existing.shareUrl)) {
+          existing.status = "done";
+          existing.progress = 100;
+        }
+      }
+
       pushMediaList();
       return;
     }
@@ -274,6 +297,9 @@
           top: 16px;
           right: 16px;
           width: var(--vd-width);
+          max-width: calc(100vw - 24px);
+          box-sizing: border-box;
+          contain: layout paint;
           display: flex;
           flex-direction: column;
           background: #ffffff;
@@ -361,10 +387,7 @@
       </style>
       <div class="vd-panel" id="vd-panel">
         <div class="vd-panel__bar" id="vd-bar">
-          <span class="vd-panel__title">
-            视频下载
-            <span class="vd-panel__count" id="vd-count"></span>
-          </span>
+          <span class="vd-panel__title">视频下载</span>
           <span class="vd-panel__actions">
             <button class="vd-panel__btn" id="vd-collapse" title="折叠 / 展开">−</button>
             <button class="vd-panel__btn" id="vd-close" title="关闭面板（不影响正在进行的下载）">✕</button>
@@ -464,6 +487,7 @@
       title: item.title,
       author: item.author,
       cover: item.cover,
+      previewUrl: item.videoUrl || (Array.isArray(item.videoUrls) ? item.videoUrls[0] : "") || "",
       size: item.size,
       type: item.type,
       platform: item.platform || currentPlatform.name,
@@ -477,8 +501,6 @@
     if (panelFrame && panelFrame.contentWindow) {
       panelFrame.contentWindow.postMessage({ source: "vd-content", ...message }, "*");
     }
-    const countNode = host?.shadowRoot?.querySelector("#vd-count");
-    if (countNode) countNode.textContent = mediaList.length > 1 ? `· ${mediaList.length}` : "";
   }
 
   function pushMediaList() {
