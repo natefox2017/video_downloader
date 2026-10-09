@@ -1,8 +1,8 @@
 /**
- * panel.js — Minimal floating-panel UI.
+ * panel.js — Compact floating-panel UI.
  *
- * The panel only shows detected videos, lets the user choose which ones to download,
- * and reports essential download status. All download logic stays in content.js.
+ * The panel shows title, size, a small preview trigger, selection, and essential download state.
+ * Downloading and media handling stay in content.js.
  */
 
 (() => {
@@ -20,12 +20,9 @@
   const downloadEl = document.getElementById("download");
   const downloadLabel = document.getElementById("download-label");
   const toastEl = document.getElementById("toast");
+  const previewEl = document.getElementById("preview");
+  const previewVideo = document.getElementById("preview-video");
 
-  /**
-   * Escape text inserted into HTML.
-   * @param {*} text Input value.
-   * @returns {string} Escaped HTML text.
-   */
   function escapeHtml(text) {
     return String(text == null ? "" : text)
       .replace(/&/g, "&amp;")
@@ -34,13 +31,16 @@
       .replace(/"/g, "&quot;");
   }
 
-  let toastTimer = null;
+  function formatSize(bytes) {
+    if (!bytes || bytes <= 0) return "大小未知";
+    const units = ["B", "KB", "MB", "GB"];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const value = bytes / Math.pow(1024, index);
+    const digits = index === 0 ? 0 : value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return value.toFixed(digits) + " " + units[index];
+  }
 
-  /**
-   * Show a short non-blocking message.
-   * @param {string} message Message text.
-   * @returns {void}
-   */
+  let toastTimer = null;
   function toast(message) {
     if (!message) return;
     toastEl.textContent = message;
@@ -49,29 +49,14 @@
     toastTimer = setTimeout(() => toastEl.classList.remove("is-show"), 1800);
   }
 
-  /**
-   * Send a protocol message to content.js.
-   * @param {Object} message Protocol payload.
-   * @returns {void}
-   */
   function post(message) {
     window.parent.postMessage({ source: "vd-panel", ...message }, "*");
   }
 
-  /**
-   * Test whether an item has already completed.
-   * @param {Object} item Media row.
-   * @returns {boolean} True when the item is complete.
-   */
   function isDone(item) {
     return item.status === "done";
   }
 
-  /**
-   * Build the essential state label for one item.
-   * @param {Object} item Media row.
-   * @returns {string} State label.
-   */
   function stateText(item) {
     if (item.status === "downloading") return item.progress > 0 ? item.progress + "%" : "下载中";
     if (item.status === "done") return "已完成";
@@ -79,11 +64,6 @@
     return "";
   }
 
-  /**
-   * Return the CSS class for one state label.
-   * @param {Object} item Media row.
-   * @returns {string} CSS class list.
-   */
   function stateClass(item) {
     if (item.status === "done") return "row__state is-done";
     if (item.status === "error") return "row__state is-error";
@@ -91,10 +71,6 @@
     return "row__state";
   }
 
-  /**
-   * Render the video list.
-   * @returns {void}
-   */
   function render() {
     const single = state.items.length === 1;
     document.body.classList.toggle("is-single", single);
@@ -103,6 +79,9 @@
     listEl.innerHTML = state.items.map((item) => {
       const selected = state.selected.has(item.shareUrl);
       const status = stateText(item);
+      const cover = item.cover
+        ? `<img src="${escapeHtml(item.cover)}" alt="" loading="lazy" />`
+        : "";
       const classes = [
         "row",
         selected ? "is-selected" : "",
@@ -120,11 +99,18 @@
               </svg>
             </span>
           </label>
+          <button class="row__thumb ${item.cover ? "has-cover" : ""}" type="button" data-preview="1" data-stop="1" title="预览视频">
+            ${cover}
+            <span class="row__thumb-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M7 5.5v9l7-4.5z"/></svg>
+            </span>
+          </button>
           <div class="row__main">
             <div class="row__line">
               <div class="row__title" title="${escapeHtml(item.title || "视频")}">${escapeHtml(item.title || "视频")}</div>
               ${status ? `<span class="${stateClass(item)}">${escapeHtml(status)}</span>` : ""}
             </div>
+            <div class="row__size">${escapeHtml(formatSize(item.size))}</div>
             <div class="row__progress">
               <div class="row__progress-inner" style="width:${item.progress || 0}%"></div>
             </div>
@@ -137,25 +123,22 @@
     reportHeight();
   }
 
-  /**
-   * Report the preferred iframe height to content.js.
-   * @returns {void}
-   */
+  function measuredListHeight() {
+    if (!state.items.length) return 88;
+    return Array.from(listEl.children).reduce((total, row) => total + row.getBoundingClientRect().height, 0);
+  }
+
   let resizeTimer = null;
   function reportHeight() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       const actionbar = document.querySelector(".actionbar")?.offsetHeight || 0;
-      const contentHeight = state.items.length > 0 ? listEl.scrollHeight : 88;
-      post({ type: "panel_resize", height: contentHeight + actionbar + 4 });
+      // Measure actual row boxes. list.scrollHeight includes flex-grown empty space and caused
+      // a feedback loop where every selection render made the iframe taller.
+      post({ type: "panel_resize", height: measuredListHeight() + actionbar + 4 });
     }, 40);
   }
 
-  /**
-   * Update only mutable download state in one row.
-   * @param {Object} item Media row.
-   * @returns {void}
-   */
   function updateRow(item) {
     const row = listEl.querySelector(`.row[data-url="${CSS.escape(item.shareUrl)}"]`);
     if (!row) return;
@@ -190,10 +173,6 @@
     if (progress) progress.style.width = (item.progress || 0) + "%";
   }
 
-  /**
-   * Refresh the only primary action.
-   * @returns {void}
-   */
   function renderAction() {
     const selectedCount = state.items.filter((item) => state.selected.has(item.shareUrl) && !isDone(item)).length;
 
@@ -211,11 +190,6 @@
     downloadEl.disabled = selectedCount === 0;
   }
 
-  /**
-   * Build the completion toast.
-   * @param {Object} message Batch result payload.
-   * @returns {string} Completion text.
-   */
   function finishText(message) {
     const succeeded = message.succeeded == null ? message.completed || 0 : message.succeeded;
     const failed = message.failed || 0;
@@ -224,12 +198,6 @@
     return "下载完成";
   }
 
-  /**
-   * Toggle one item in the selection.
-   * @param {string} shareUrl Item key.
-   * @param {boolean=} force Optional explicit target state.
-   * @returns {void}
-   */
   function toggleOne(shareUrl, force) {
     const item = state.items.find((row) => row.shareUrl === shareUrl);
     if (!item || isDone(item)) return;
@@ -239,7 +207,34 @@
     render();
   }
 
+  function closePreview() {
+    previewVideo.pause();
+    previewVideo.removeAttribute("src");
+    previewVideo.load();
+    previewEl.classList.remove("is-open");
+    previewEl.setAttribute("aria-hidden", "true");
+  }
+
+  function openPreview(item) {
+    if (!item?.previewUrl) {
+      toast("这个视频暂时不能预览");
+      return;
+    }
+    previewVideo.src = item.previewUrl;
+    previewEl.classList.add("is-open");
+    previewEl.setAttribute("aria-hidden", "false");
+    previewVideo.play().catch(() => {});
+  }
+
   listEl.addEventListener("click", (event) => {
+    const previewButton = event.target.closest("[data-preview]");
+    if (previewButton) {
+      const row = previewButton.closest(".row");
+      const item = row && state.items.find((entry) => entry.shareUrl === row.dataset.url);
+      if (item) openPreview(item);
+      return;
+    }
+
     if (event.target.closest("[data-stop]")) return;
     if (state.items.length === 1) return;
     const row = event.target.closest(".row");
@@ -253,6 +248,17 @@
     if (!row) return;
     event.stopPropagation();
     toggleOne(row.dataset.url, event.target.checked);
+  });
+
+  document.getElementById("preview-close").addEventListener("click", closePreview);
+  document.getElementById("preview-backdrop").addEventListener("click", closePreview);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && previewEl.classList.contains("is-open")) closePreview();
+  });
+  previewVideo.addEventListener("error", () => {
+    if (!previewEl.classList.contains("is-open")) return;
+    closePreview();
+    toast("这个视频暂时不能预览");
   });
 
   downloadEl.addEventListener("click", () => {
@@ -315,10 +321,7 @@
         break;
 
       case "batch_progress":
-        state.batch = {
-          completed: message.completed || 0,
-          total: message.total || 0,
-        };
+        state.batch = { completed: message.completed || 0, total: message.total || 0 };
         renderAction();
         break;
 
