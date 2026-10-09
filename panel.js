@@ -1,54 +1,46 @@
 /**
- * panel.js —— 浮层面板的界面逻辑（纯原生 JS，无框架）
+ * panel.js — Compact floating-panel UI.
  *
- * 面板只负责"展示列表 + 收集选择 + 下发指令"，真正的下载由父页面里的 content.js 执行；
- * 双方通过 postMessage 通信（面板在 iframe 中，与页面跨源）：
- *   content → panel : media_list / panel_init / item_status / batch_* / toast / item_error
- *   panel → content : panel_ready / start_download / stop_download
+ * The panel only displays detected media, collects the current selection, and sends commands.
+ * Downloading and media handling stay in content.js.
  */
 
 (() => {
   "use strict";
 
-  /* ---------------- 状态 ---------------- */
-
   const state = {
     items: [],
     selected: new Set(),
     downloading: false,
-    batch: { completed: 0, total: 0, tooltip: "" },
-    keyword: "",
-    /** 平台筛选：platformId，"" = 全部 */
-    platFilter: "",
-    /** 排序：time（最新优先）/ size（体积最大优先） */
-    sort: "time",
+    batch: { completed: 0, total: 0 },
   };
-
-  /* ---------------- DOM ---------------- */
 
   const listEl = document.getElementById("list");
   const emptyEl = document.getElementById("empty");
   const countEl = document.getElementById("count");
   const selectAllEl = document.getElementById("select-all");
-  const invertEl = document.getElementById("invert");
-  const sortEl = document.getElementById("sort");
-  const filtersEl = document.getElementById("filters");
   const downloadEl = document.getElementById("download");
   const downloadLabel = document.getElementById("download-label");
   const toastEl = document.getElementById("toast");
-  const searchEl = document.getElementById("search");
-  const searchBox = searchEl.closest(".search");
-  const searchClear = document.getElementById("search-clear");
 
-  /* ---------------- 工具 ---------------- */
-
+  /**
+   * Format a byte count for compact display.
+   * @param {number} bytes Raw byte count.
+   * @returns {string} Human-readable size, or an empty string when unknown.
+   */
   function formatSize(bytes) {
-    if (!bytes || bytes <= 0) return "未知大小";
+    if (!bytes || bytes <= 0) return "";
     const units = ["B", "KB", "MB", "GB"];
     const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    return (bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 2) + " " + units[index];
+    const value = bytes / Math.pow(1024, index);
+    return value.toFixed(index === 0 ? 0 : value >= 10 ? 1 : 2) + " " + units[index];
   }
 
+  /**
+   * Escape text inserted into HTML.
+   * @param {*} text Input value.
+   * @returns {string} Escaped HTML text.
+   */
   function escapeHtml(text) {
     return String(text == null ? "" : text)
       .replace(/&/g, "&amp;")
@@ -58,129 +50,51 @@
   }
 
   let toastTimer = null;
+
+  /**
+   * Show a short non-blocking message.
+   * @param {string} message Message text.
+   * @returns {void}
+   */
   function toast(message) {
     if (!message) return;
     toastEl.textContent = message;
     toastEl.classList.add("is-show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove("is-show"), 2200);
+    toastTimer = setTimeout(() => toastEl.classList.remove("is-show"), 2000);
   }
 
+  /**
+   * Send a protocol message to content.js.
+   * @param {Object} message Protocol payload.
+   * @returns {void}
+   */
   function post(message) {
     window.parent.postMessage({ source: "vd-panel", ...message }, "*");
   }
 
-  /** 平台 id → 徽标样式类 */
-  const PLAT_CLASS = {
-    douyin: "plat--douyin",
-    kuaishou: "plat--kuaishou",
-    bilibili: "plat--bilibili",
-    weibo: "plat--weibo",
-    xiaohongshu: "plat--xiaohongshu",
-    xigua: "plat--xigua",
-    generic: "plat--generic",
-  };
-
-  function platClass(item) {
-    return "plat " + (PLAT_CLASS[item.platformId] || "plat--generic");
-  }
-
+  /**
+   * Test whether an item has already completed.
+   * @param {Object} item Media row.
+   * @returns {boolean} True when the item is complete.
+   */
   function isDone(item) {
     return item.status === "done";
   }
 
+  /**
+   * Return items that may still be selected for download.
+   * @returns {Object[]} Selectable media rows.
+   */
   function selectableItems() {
     return state.items.filter((item) => !isDone(item));
   }
 
-  /** 平台品牌色（用于筛选 chips 的圆点） */
-  const PLAT_COLOR = {
-    douyin: "#161823",
-    kuaishou: "#ff4906",
-    bilibili: "#00a1d6",
-    weibo: "#e6162d",
-    xiaohongshu: "#ff2442",
-    xigua: "#ff6a00",
-    youtube: "#ff0000",
-    tiktok: "#000000",
-    generic: "#6366f1",
-  };
-
-  function platColor(item) {
-    return PLAT_COLOR[item.platformId] || PLAT_COLOR.generic;
-  }
-
-  /** 搜索 + 平台筛选 + 排序后的可见条目 */
-  function visibleItems() {
-    let items = state.items;
-
-    if (state.platFilter) {
-      items = items.filter((item) => item.platformId === state.platFilter);
-    }
-
-    const kw = state.keyword.trim().toLowerCase();
-    if (kw) {
-      items = items.filter((item) =>
-        (item.title || "").toLowerCase().includes(kw) ||
-        (item.author || "").toLowerCase().includes(kw)
-      );
-    }
-
-    items = items.slice();
-    if (state.sort === "size") {
-      items.sort((a, b) => (b.size || 0) - (a.size || 0));
-    }
-    // sort === "time" 时保持原顺序（最新在前）
-
-    return items;
-  }
-
-  /** 渲染平台筛选 chips（只显示有视频的平台） */
-  function renderFilters() {
-    const counts = {};
-    state.items.forEach((item) => {
-      const pid = item.platformId || "generic";
-      counts[pid] = counts[pid] || { name: item.platform || "通用", n: 0 };
-      counts[pid].n += 1;
-    });
-
-    const pids = Object.keys(counts);
-    if (pids.length <= 1) {
-      filtersEl.innerHTML = "";
-      if (state.platFilter) state.platFilter = "";
-      return;
-    }
-
-    // 当前筛选的平台如果没视频了，回到全部
-    if (state.platFilter && !counts[state.platFilter]) state.platFilter = "";
-
-    const total = state.items.length;
-    let html = `<button class="fchip ${state.platFilter === "" ? "is-active" : ""}" data-plat="">全部 <span class="fchip__n">${total}</span></button>`;
-    // 按数量降序排列
-    pids.sort((a, b) => counts[b].n - counts[a].n);
-    pids.forEach((pid) => {
-      const c = counts[pid];
-      const color = PLAT_COLOR[pid] || PLAT_COLOR.generic;
-      html += `<button class="fchip ${state.platFilter === pid ? "is-active" : ""}" data-plat="${escapeHtml(pid)}">` +
-        `<span class="fchip__dot" style="background:${color}"></span>${escapeHtml(c.name)} <span class="fchip__n">${c.n}</span></button>`;
-    });
-    filtersEl.innerHTML = html;
-  }
-
-  /** 时长格式化：秒 → mm:ss / hh:mm:ss */
-  function formatDuration(seconds) {
-    if (!seconds || seconds <= 0) return "";
-    const s = Math.floor(seconds);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
-    const ss = String(sec).padStart(2, "0");
-    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-  }
-
-  /* ---------------- 渲染 ---------------- */
-
+  /**
+   * Build the compact state label for one item.
+   * @param {Object} item Media row.
+   * @returns {string} State label.
+   */
   function stateText(item) {
     if (item.status === "downloading") return item.progress > 0 ? item.progress + "%" : "下载中";
     if (item.status === "done") return "已完成";
@@ -188,86 +102,58 @@
     return "";
   }
 
+  /**
+   * Return the CSS class for one item state label.
+   * @param {Object} item Media row.
+   * @returns {string} CSS class list.
+   */
   function stateClass(item) {
-    if (item.status === "done") return "card__state is-done";
-    if (item.status === "error") return "card__state is-error";
-    if (item.status === "downloading") return "card__state is-downloading";
-    return "card__state";
+    if (item.status === "done") return "row__state is-done";
+    if (item.status === "error") return "row__state is-error";
+    if (item.status === "downloading") return "row__state is-downloading";
+    return "row__state";
   }
 
+  /**
+   * Render the current media list.
+   * @returns {void}
+   */
   function render() {
-    renderFilters();
-    const items = visibleItems();
-    const filtering = state.keyword.trim().length > 0 || state.platFilter !== "";
+    emptyEl.classList.toggle("hidden", state.items.length > 0);
 
-    emptyEl.classList.toggle("hidden", items.length > 0);
-    if (filtering && items.length === 0) {
-      emptyEl.querySelector(".empty__title").textContent = "没有匹配的结果";
-      emptyEl.querySelector(".empty__desc").textContent = "换个关键词试试";
-    } else {
-      emptyEl.querySelector(".empty__title").textContent = "还没有识别到视频";
-      emptyEl.querySelector(".empty__desc").textContent = "在页面里播放一个视频，这里会自动出现";
-    }
-
-    listEl.innerHTML = items.map((item) => {
+    listEl.innerHTML = state.items.map((item) => {
       const selected = state.selected.has(item.shareUrl);
-      const cardClass = [
-        "card",
+      const status = stateText(item);
+      const info = [
+        item.platform || "网页视频",
+        formatSize(item.size),
+      ].filter(Boolean).join(" · ");
+      const classes = [
+        "row",
         selected ? "is-selected" : "",
         item.status === "downloading" ? "is-downloading" : "",
         isDone(item) ? "is-done" : "",
       ].filter(Boolean).join(" ");
-      const coverImg = item.cover
-        ? `<img class="card__cover" src="${escapeHtml(item.cover)}" alt="" loading="lazy" />`
-        : `<span class="card__cover"></span>`;
-      const cover = `
-        <div class="card__cover-wrap" data-stop="1">
-          ${coverImg}
-          <button class="card__play" data-preview="1" title="预览视频">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
-          </button>
-        </div>`;
 
       return `
-        <li class="${cardClass}" data-url="${escapeHtml(item.shareUrl)}">
-          <label class="check card__check" data-stop="1">
-            <input type="checkbox" class="row__check" ${selected ? "checked" : ""} />
-            <span class="check__box"><svg viewBox="0 0 12 12" width="10" height="10"><path d="M2 6.5 4.8 9 10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <li class="${classes}" data-url="${escapeHtml(item.shareUrl)}">
+          <label class="check row__check${isDone(item) ? " is-disabled" : ""}" data-stop="1">
+            <input type="checkbox" class="row__check-input" ${selected ? "checked" : ""} ${isDone(item) ? "disabled" : ""} />
+            <span class="check__box">
+              <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                <path d="M2 6.5 4.8 9 10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
           </label>
-          ${cover}
-          <div class="card__main">
-            <div class="card__title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
-            <div class="card__meta">
-              ${item.duration > 0 ? `<span class="tag tag--time">⏱ ${escapeHtml(formatDuration(item.duration))}</span>` : ""}
-              <span class="tag">${escapeHtml(item.type || "视频")}</span>
-              ${item.author ? `<span class="card__author">${escapeHtml(item.author)}</span>` : ""}
+          <div class="row__main">
+            <div class="row__title" title="${escapeHtml(item.title || "未命名视频")}">${escapeHtml(item.title || "未命名视频")}</div>
+            <div class="row__meta">
+              <span class="row__info">${escapeHtml(info)}</span>
+              ${status ? `<span class="${stateClass(item)}">${escapeHtml(status)}</span>` : ""}
             </div>
-            <div class="card__foot">
-              <span class="card__size">${escapeHtml(formatSize(item.size))}</span>
-              <div class="card__bar"><div class="card__bar-inner" style="width:${item.progress || 0}%"></div></div>
-              <span class="${stateClass(item)}">${escapeHtml(stateText(item))}</span>
+            <div class="row__progress">
+              <div class="row__progress-inner" style="width:${item.progress || 0}%"></div>
             </div>
-          </div>
-          <div class="card__actions" data-stop="1">
-            ${item.platformId === "douyin" && item.originVid ? `
-            <button class="icon-btn" data-origin="1" data-vid="${escapeHtml(item.originVid)}" title="溯源：复制原画直链">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
-                <circle cx="8" cy="8" r="6" />
-                <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
-                <path d="M8 2v2M8 12v2M2 8h2M12 8h2" stroke-linecap="round" />
-              </svg>
-            </button>` : ""}
-            <button class="icon-btn" data-copy="1" title="复制视频链接">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3.5v5A1.5 1.5 0 0 0 4 10h1.5" />
-              </svg>
-            </button>
-            <button class="card__go" data-download-one="1" title="直接下载这一条">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M8 2v8m0 0 3.5-3.5M8 10 4.5 6.5M2.5 13.5h11" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </button>
           </div>
         </li>
       `;
@@ -277,102 +163,96 @@
     reportHeight();
   }
 
-  /** 上报内容高度 → content.js 自适应面板高度 */
+  /**
+   * Report the preferred iframe height to content.js.
+   * @returns {void}
+   */
   let resizeTimer = null;
   function reportHeight() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-      // 各区域实际高度求和（list 取内容全高，由外部卡最大高度）
       const topbar = document.querySelector(".topbar")?.offsetHeight || 0;
-      const toolbar = document.querySelector(".toolbar")?.offsetHeight || 0;
-      const filters = document.querySelector(".filters")?.offsetHeight || 0;
-      const listContent = listEl.scrollHeight || 0;
       const actionbar = document.querySelector(".actionbar")?.offsetHeight || 0;
-      const h = topbar + toolbar + filters + listContent + actionbar + 24;
-      post({ type: "panel_resize", height: h });
-    }, 50);
+      const contentHeight = state.items.length > 0 ? listEl.scrollHeight : 120;
+      post({ type: "panel_resize", height: topbar + contentHeight + actionbar + 8 });
+    }, 40);
   }
 
-  /** 只刷新某一行的下载状态 */
+  /**
+   * Update only the mutable download state of one rendered row.
+   * @param {Object} item Media row.
+   * @returns {void}
+   */
   function updateRow(item) {
-    const row = listEl.querySelector(`.card[data-url="${CSS.escape(item.shareUrl)}"]`);
+    const row = listEl.querySelector(`.row[data-url="${CSS.escape(item.shareUrl)}"]`);
     if (!row) return;
 
     row.classList.toggle("is-downloading", item.status === "downloading");
     row.classList.toggle("is-done", isDone(item));
     row.classList.toggle("is-selected", state.selected.has(item.shareUrl));
 
-    const check = row.querySelector(".row__check");
-    if (check) check.checked = state.selected.has(item.shareUrl);
-
-    const stateCell = row.querySelector(".card__state");
-    if (stateCell) {
-      stateCell.textContent = stateText(item);
-      stateCell.className = stateClass(item);
+    const checkbox = row.querySelector(".row__check-input");
+    if (checkbox) {
+      checkbox.checked = state.selected.has(item.shareUrl);
+      checkbox.disabled = isDone(item);
     }
 
-    const bar = row.querySelector(".card__bar-inner");
-    if (bar) bar.style.width = (item.progress || 0) + "%";
+    const status = row.querySelector(".row__state");
+    const nextText = stateText(item);
+    if (status) {
+      status.textContent = nextText;
+      status.className = stateClass(item);
+    } else if (nextText) {
+      const meta = row.querySelector(".row__meta");
+      if (meta) {
+        const node = document.createElement("span");
+        node.className = stateClass(item);
+        node.textContent = nextText;
+        meta.appendChild(node);
+      }
+    }
+
+    const progress = row.querySelector(".row__progress-inner");
+    if (progress) progress.style.width = (item.progress || 0) + "%";
   }
 
-  /** 刷新工具栏与底部按钮 */
+  /**
+   * Refresh selection controls and the primary action.
+   * @returns {void}
+   */
   function renderToolbar() {
-    const total = state.items.length;
-    const doneCount = state.items.filter(isDone).length;
     const selectedCount = state.items.filter((item) => state.selected.has(item.shareUrl)).length;
     const selectable = selectableItems();
     const selectableSelected = selectable.filter((item) => state.selected.has(item.shareUrl)).length;
+    const selectAllLabel = selectAllEl.closest(".check");
 
     if (state.downloading) {
       countEl.textContent = `下载中 ${state.batch.completed}/${state.batch.total}`;
-      countEl.title = state.batch.tooltip || "";
     } else {
-      const kw = state.keyword.trim();
-      const matched = visibleItems().length;
-      const totalSize = state.items.reduce((sum, item) => sum + (item.size || 0), 0);
-      const sizeText = totalSize > 0 ? ` · ${formatSize(totalSize)}` : "";
-      if (kw || state.platFilter) {
-        countEl.textContent = `共 ${total} 条 · 匹配 ${matched} 条${sizeText}`;
-      } else {
-        countEl.textContent = `共 ${total} 条 · 已选 ${selectedCount}${sizeText}`;
-      }
-      countEl.title = doneCount ? `共 ${total} 条，其中已完成 ${doneCount} 条` : `共 ${total} 条`;
+      countEl.textContent = selectedCount > 0 ? `已选 ${selectedCount}` : "";
     }
 
     selectAllEl.checked = selectable.length > 0 && selectableSelected === selectable.length;
     selectAllEl.indeterminate = selectableSelected > 0 && selectableSelected < selectable.length;
+    selectAllEl.disabled = selectable.length === 0;
+    if (selectAllLabel) selectAllLabel.classList.toggle("is-disabled", selectable.length === 0);
 
     if (state.downloading) {
       downloadLabel.textContent = `停止下载 (${state.batch.completed}/${state.batch.total})`;
       downloadEl.classList.add("is-stop");
       downloadEl.disabled = false;
     } else {
-      downloadLabel.textContent = selectedCount > 0 ? `下载选中 (${selectedCount})` : "下载选中";
+      downloadLabel.textContent = selectedCount > 0 ? `下载 ${selectedCount} 项` : "下载选中";
       downloadEl.classList.remove("is-stop");
       downloadEl.disabled = selectedCount === 0;
     }
   }
 
-  function startText(message) {
-    const threads = message.concurrency || 1;
-    const head = `开始下载 ${message.total} 条 · ${threads} 线程并发`;
-    const plan = message.memory;
-    if (!plan || !plan.usableBytes) return head;
-    const sampled = plan.sizeSampled ? "" : "，视频体积未知按 80 MB 估";
-    return `${head}（${formatSize(plan.usableBytes)} ÷ 单条 ${formatSize(plan.perVideo)}${sampled}）`;
-  }
-
-  function startTooltip(message) {
-    const plan = message.memory;
-    if (!plan) return "";
-    return [
-      `线程数 ${message.concurrency || 1} = ${formatSize(plan.usableBytes)} ÷ 单条 ${formatSize(plan.perVideo)}`,
-      `内存预算来源：${plan.source}，只取 70%`,
-      plan.sizeSampled ? "单条体积取自接口返回的真实文件大小" : "接口没给文件大小，按 80 MB 估算",
-      "下载过程中浏览器若内存吃紧会自动减少并发",
-    ].join("\n");
-  }
-
+  /**
+   * Build the completion toast.
+   * @param {Object} message Batch result payload.
+   * @returns {string} Completion text.
+   */
   function finishText(message) {
     const succeeded = message.succeeded == null ? message.completed || 0 : message.succeeded;
     const failed = message.failed || 0;
@@ -381,163 +261,34 @@
     return `全部完成，共 ${succeeded} 条`;
   }
 
-  /* ---------------- 列表交互 ---------------- */
-
+  /**
+   * Toggle one item in the selection.
+   * @param {string} shareUrl Item key.
+   * @param {boolean=} force Optional explicit target state.
+   * @returns {void}
+   */
   function toggleOne(shareUrl, force) {
+    const item = state.items.find((row) => row.shareUrl === shareUrl);
+    if (!item || isDone(item)) return;
     const shouldSelect = typeof force === "boolean" ? force : !state.selected.has(shareUrl);
     if (shouldSelect) state.selected.add(shareUrl);
     else state.selected.delete(shareUrl);
     render();
   }
 
-  // 点击卡片 = 切换勾选（点快捷按钮 / 复选框本身除外）
   listEl.addEventListener("click", (event) => {
     if (event.target.closest("[data-stop]")) return;
-    const card = event.target.closest(".card");
-    if (!card || !card.dataset.url) return;
-    toggleOne(card.dataset.url);
+    const row = event.target.closest(".row");
+    if (!row || !row.dataset.url) return;
+    toggleOne(row.dataset.url);
   });
 
   listEl.addEventListener("change", (event) => {
-    if (!event.target.classList.contains("row__check")) return;
-    const card = event.target.closest(".card");
-    if (!card) return;
+    if (!event.target.classList.contains("row__check-input")) return;
+    const row = event.target.closest(".row");
+    if (!row) return;
     event.stopPropagation();
-    toggleOne(card.dataset.url, event.target.checked);
-  });
-
-  // 单行快捷下载
-  listEl.addEventListener("click", (event) => {
-    const go = event.target.closest("[data-download-one]");
-    if (!go) return;
-    const card = go.closest(".card");
-    if (!card || !card.dataset.url) return;
-    const item = state.items.find((row) => row.shareUrl === card.dataset.url);
-    if (!item || isDone(item)) return;
-    post({ type: "start_download", shareUrls: [item.shareUrl] });
-  });
-
-  // 复制视频链接
-  listEl.addEventListener("click", async (event) => {
-    const btn = event.target.closest("[data-copy]");
-    if (!btn) return;
-    const card = btn.closest(".card");
-    if (!card || !card.dataset.url) return;
-    const item = state.items.find((row) => row.shareUrl === card.dataset.url);
-    if (!item) return;
-    const url = item.videoUrl || (item.videoUrls && item.videoUrls[0]) || item.shareUrl;
-    try {
-      await navigator.clipboard.writeText(url);
-      btn.classList.add("is-ok");
-      toast("视频链接已复制");
-      setTimeout(() => btn.classList.remove("is-ok"), 1200);
-    } catch (error) {
-      // clipboard API 不可用时降级：用临时 textarea
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = url;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-        btn.classList.add("is-ok");
-        toast("视频链接已复制");
-        setTimeout(() => btn.classList.remove("is-ok"), 1200);
-      } catch (fallbackError) {
-        toast("复制失败，请手动复制");
-      }
-    }
-  });
-
-  // 溯源：解析抖音原画直链并复制
-  listEl.addEventListener("click", async (event) => {
-    const btn = event.target.closest("[data-origin]");
-    if (!btn) return;
-    const vid = btn.dataset.vid;
-    if (!vid) {
-      toast("未找到原画 ID");
-      return;
-    }
-    btn.disabled = true;
-    toast("正在解析原画…");
-    try {
-      // 原画接口：302 跳转到 CDN 直链（参考 jiuhunwl/short_videos）
-      // 直接跟随跳转，response.url 即最终 CDN 地址（body 不读取，不下载内容）
-      const apiUrl = `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(vid)}&ratio=default&line=0`;
-      const response = await fetch(apiUrl, { redirect: "follow" });
-      const originUrl = response.url || "";
-      if (!originUrl || originUrl === apiUrl) throw new Error("未解析到原画地址");
-
-      try {
-        await navigator.clipboard.writeText(originUrl);
-      } catch (clipError) {
-        const ta = document.createElement("textarea");
-        ta.value = originUrl;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-      btn.classList.add("is-ok");
-      toast("原画直链已复制");
-      setTimeout(() => btn.classList.remove("is-ok"), 1200);
-    } catch (error) {
-      toast("原画解析失败，已降级复制当前链接");
-      try {
-        const card = btn.closest(".card");
-        const item = card && state.items.find((row) => row.shareUrl === card.dataset.url);
-        const fallback = item?.videoUrl || item?.shareUrl || "";
-        if (fallback) await navigator.clipboard.writeText(fallback);
-      } catch (fallbackError) { /* 忽略 */ }
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  /* ---------------- 视频预览 ---------------- */
-
-  const previewEl = document.getElementById("preview");
-  const previewVideo = document.getElementById("preview-video");
-  const previewTitle = document.getElementById("preview-title");
-
-  function openPreview(item) {
-    const url = item.videoUrl || (item.videoUrls && item.videoUrls[0]);
-    if (!url) {
-      toast("该视频暂无可预览的地址");
-      return;
-    }
-    previewTitle.textContent = item.title || "视频预览";
-    previewVideo.src = url;
-    previewEl.classList.add("is-open");
-    previewVideo.play().catch(() => {});
-  }
-
-  function closePreview() {
-    previewVideo.pause();
-    previewVideo.removeAttribute("src");
-    previewVideo.load();
-    previewEl.classList.remove("is-open");
-  }
-
-  document.getElementById("preview-close").addEventListener("click", closePreview);
-  document.getElementById("preview-backdrop").addEventListener("click", closePreview);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && previewEl.classList.contains("is-open")) closePreview();
-  });
-
-  // 点击封面播放按钮 → 预览
-  listEl.addEventListener("click", (event) => {
-    const btn = event.target.closest("[data-preview]");
-    if (!btn) return;
-    event.stopPropagation();
-    const card = btn.closest(".card");
-    if (!card || !card.dataset.url) return;
-    const item = state.items.find((row) => row.shareUrl === card.dataset.url);
-    if (item) openPreview(item);
+    toggleOne(row.dataset.url, event.target.checked);
   });
 
   selectAllEl.addEventListener("change", () => {
@@ -549,67 +300,24 @@
     render();
   });
 
-  invertEl.addEventListener("click", () => {
-    selectableItems().forEach((item) => {
-      if (state.selected.has(item.shareUrl)) state.selected.delete(item.shareUrl);
-      else state.selected.add(item.shareUrl);
-    });
-    render();
-  });
-
-  // 平台筛选
-  filtersEl.addEventListener("click", (event) => {
-    const chip = event.target.closest(".fchip");
-    if (!chip) return;
-    state.platFilter = chip.dataset.plat || "";
-    render();
-  });
-
-  // 排序切换：最新优先 ↔ 体积最大优先
-  const SORT_LABEL = { time: "🕐 最新", size: "💾 最大" };
-  sortEl.addEventListener("click", () => {
-    state.sort = state.sort === "time" ? "size" : "time";
-    sortEl.textContent = SORT_LABEL[state.sort];
-    render();
-  });
-
   downloadEl.addEventListener("click", () => {
     if (state.downloading) {
       post({ type: "stop_download" });
       toast("正在停止，已发起的下载完成后结束");
       return;
     }
+
     const shareUrls = state.items
       .filter((item) => state.selected.has(item.shareUrl) && !isDone(item))
       .map((item) => item.shareUrl);
+
     if (!shareUrls.length) {
       toast("请先勾选需要下载的视频");
       return;
     }
+
     post({ type: "start_download", shareUrls });
   });
-
-  /* ---------------- 搜索 ---------------- */
-
-  let searchDebounce = null;
-  searchEl.addEventListener("input", () => {
-    searchBox.classList.toggle("has-text", searchEl.value.length > 0);
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => {
-      state.keyword = searchEl.value;
-      render();
-    }, 180);
-  });
-
-  searchClear.addEventListener("click", () => {
-    searchEl.value = "";
-    searchBox.classList.remove("has-text");
-    state.keyword = "";
-    render();
-    searchEl.focus();
-  });
-
-  /* ---------------- 与 content.js 通信 ---------------- */
 
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -620,15 +328,19 @@
       case "panel_init": {
         const previous = new Set(state.items.map((item) => item.shareUrl));
         state.items = message.items || [];
+
         state.items.forEach((item) => {
           if (isDone(item)) state.selected.delete(item.shareUrl);
         });
+
         state.items.forEach((item) => {
           if (!previous.has(item.shareUrl) && !isDone(item)) state.selected.add(item.shareUrl);
         });
+
         [...state.selected].forEach((url) => {
           if (!state.items.some((item) => item.shareUrl === url)) state.selected.delete(url);
         });
+
         render();
         break;
       }
@@ -647,22 +359,22 @@
 
       case "batch_started":
         state.downloading = true;
-        state.batch = { completed: 0, total: message.total || 0, tooltip: startTooltip(message) };
+        state.batch = { completed: 0, total: message.total || 0 };
         renderToolbar();
-        toast(startText(message));
+        toast(`开始下载 ${message.total || 0} 条`);
         break;
 
       case "batch_progress":
-        state.batch = Object.assign({}, state.batch, {
+        state.batch = {
           completed: message.completed || 0,
           total: message.total || 0,
-        });
+        };
         renderToolbar();
         break;
 
       case "batch_finished":
         state.downloading = false;
-        state.batch = { completed: 0, total: 0, tooltip: "" };
+        state.batch = { completed: 0, total: 0 };
         render();
         toast(finishText(message));
         break;
@@ -679,8 +391,6 @@
         break;
     }
   });
-
-  /* ---------------- 启动 ---------------- */
 
   render();
   post({ type: "panel_ready" });
