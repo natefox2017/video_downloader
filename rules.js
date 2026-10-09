@@ -95,11 +95,13 @@ function detectPlatform(pageUrl) {
  * 这类地址靠“资源嗅探”（performance resource entries 的 initiatorType、
  * 或页面 <video> 元素）兜底，不在这里硬匹配，避免误杀。
  */
-const MEDIA_URL_PATTERN = /\.(m3u8|mp4|webm|mov|flv|ts|m4s|m4a|mp3|aac|wav|ogg)(\?|#|$)/i;
+// Standalone entries only: audio files and DASH/HLS fragments are not complete videos.
+const MEDIA_URL_PATTERN = /\.(m3u8|mp4|m4v|webm|mov|flv|mkv)(\?|#|$)/i;
+const FILE_MEDIA_EXT_PATTERN = /\.(m3u8|mp4|m4v|webm|mov|flv|mkv|ts|m4s)(\?|#|$)/i;
 
 /** 从 URL 里提取媒体扩展名（小写，不带点）；匹配不上返回 "" */
 function guessMediaExt(url) {
-  const match = String(url || "").match(MEDIA_URL_PATTERN);
+  const match = String(url || "").match(FILE_MEDIA_EXT_PATTERN);
   return match ? match[1].toLowerCase() : "";
 }
 
@@ -111,6 +113,76 @@ function isPlaylistUrl(url) {
 /** 是否为“看起来像可下载媒体”的 URL（先过排除规则再用这个判断） */
 function isMediaUrl(url) {
   return MEDIA_URL_PATTERN.test(String(url || ""));
+}
+
+
+/**
+ * Trust the response's media type, not a video's page title or URL extension.
+ * A generic octet-stream requires binary signature proof before admission.
+ */
+function isVideoMimeType(value) {
+  const type = String(value || "").split(";")[0].trim().toLowerCase();
+  return type.startsWith("video/") || type === "application/mp4" ||
+    type === "application/vnd.apple.mpegurl" || type === "application/x-mpegurl";
+}
+
+/** Reject definite non-video responses before spending bandwidth on their body. */
+function isRejectedMediaMimeType(value) {
+  const type = String(value || "").split(";")[0].trim().toLowerCase();
+  return type.startsWith("audio/") || type.startsWith("image/") ||
+    type.startsWith("text/") ||
+    /^application\/(json|xml|pdf|javascript|x-javascript|zip|xhtml\+xml)/.test(type);
+}
+
+/**
+ * Inspect a small leading byte range. An MP4/WebM/FLV/TS signature is much
+ * stronger evidence than a .mp4 URL; HTML errors must never be saved as video.
+ * @returns {"video"|"invalid"|"unknown"}
+ */
+function sniffVideoSignature(bytes) {
+  if (!bytes || !bytes.length) return "unknown";
+  const first = String.fromCharCode(...bytes.slice(0, Math.min(80, bytes.length))).trimStart().toLowerCase();
+  if (/^(<!doctype|<html|<\?xml|<\?php|<script|\{|"error"|access denied|forbidden)/.test(first)) return "invalid";
+  if (bytes.length >= 8 && bytes[4] === 0x66 && bytes[5] === 0x74 &&
+      bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand = String.fromCharCode(...bytes.slice(8, 12));
+    return /^(M4A |M4B )/.test(brand) ? "invalid" : "video";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 &&
+      bytes[2] === 0xdf && bytes[3] === 0xa3) return "video"; // WebM/Matroska
+  if (bytes.length >= 5 && first.startsWith("flv")) return (bytes[4] & 1) ? "video" : "invalid";
+  if (bytes.length > 376 && bytes[0] === 0x47 && bytes[188] === 0x47 &&
+      bytes[376] === 0x47) return "video"; // MPEG-TS (not standalone in sniffing)
+  if (bytes.length >= 12 && first.startsWith("riff") &&
+      String.fromCharCode(...bytes.slice(8, 12)) === "AVI ") return "video";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 ||
+      first.startsWith("id3") || first.startsWith("%pdf") ||
+      first.startsWith("gif8") || first.startsWith("riff") ||
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "invalid";
+  }
+  return "unknown";
+}
+
+/**
+ * HLS must contain actual media variants or segments, not just an audio-only
+ * rendition manifest. A segment playlist without CODECS uses segment file
+ * evidence; ambiguous encrypted/opaque segments remain unsupported to prove.
+ */
+function isHlsVideoPlaylist(text) {
+  const value = String(text || "").trimStart();
+  if (!value.startsWith("#EXTM3U")) return false;
+  if (/^#EXT-X-STREAM-INF:/m.test(value)) {
+    const streams = value.split(/\r?\n/).filter((line) => line.startsWith("#EXT-X-STREAM-INF:"));
+    return streams.some((line) => {
+      const codecs = line.match(/CODECS="([^"]+)"/i)?.[1] || "";
+      return !codecs || /(avc1|avc3|hev1|hvc1|av01|vp0[89]|dvh1|dvhe)/i.test(codecs);
+    });
+  }
+  if (!/^#EXTINF:/m.test(value)) return false;
+  const firstSegment = value.split(/\r?\n/).map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#")) || "";
+  return !!firstSegment && !/\.(aac|m4a|mp3|wav|ogg)(\?|#|$)/i.test(firstSegment);
 }
 
 /* ================================================================== */
@@ -173,6 +245,17 @@ function buildFileName(platformName, author, title) {
 const DOWNLOAD_RULES = {
   /** m3u8 分段下载并发数（分段通常很小，并发高一点没关系） */
   M3U8_SEGMENT_CONCURRENCY: 6,
+
+  /** Video identity probes are capped and never fetch a whole file. */
+  MEDIA_PROBE_TIMEOUT_MS: 8000,
+  MEDIA_PROBE_MAX_BYTES: 16384,
+  MEDIA_PROBE_CONCURRENCY: 3,
+
+  /** Stop a direct transfer after this long without a received byte. */
+  DIRECT_IDLE_TIMEOUT_MS: 20000,
+
+  /** Prevent concurrent multi-hundred-MB Blobs from overwhelming a tab. */
+  MAX_INFLIGHT_MEDIA_BYTES: 512 * 1024 * 1024,
 
   /** 单个分段下载超时（毫秒），超时则整体失败并提示用户 */
   M3U8_SEGMENT_TIMEOUT_MS: 30000,
