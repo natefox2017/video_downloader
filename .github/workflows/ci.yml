@@ -1,10 +1,7 @@
 name: ci
 
-# Quick checks on every push to main and every PR.
-# This is intentionally light (syntax + manifest parse) so PRs get fast
-# feedback and the automerge workflow can proceed. The thorough validation
-# suite runs in release.yml, which only triggers on version tags.
-
+# Fast repository checks, plus a disposable CRX3 packaging smoke test.
+# Only version tags publish signed releases; CI output is never uploaded.
 on:
   push:
     branches: [main]
@@ -23,17 +20,38 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: JS syntax check
+      - name: JavaScript syntax
         run: |
-          set -e
-          for f in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
-            node --check "$f"
+          set -euo pipefail
+          node --check scripts/release.mjs
+          for file in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
+            node --check "$file"
           done
 
       - name: Manifest parses
-        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest.json parses OK')"
+        run: node -e "JSON.parse(require('node:fs').readFileSync('manifest.json','utf8')); console.log('manifest.json parses OK')"
 
-      - name: Cross-tab registry tests
+      - name: Unit and regression tests
         run: node --test tests/*.test.js
+
+      - name: CRX3 and ZIP smoke test (ephemeral key, never published)
+        run: |
+          set -euo pipefail
+          test_dir="$(mktemp -d)"
+          trap 'rm -rf "$test_dir"' EXIT
+
+          node scripts/release.mjs stage tag0.0.1 "$PWD" "$test_dir/extension"
+          openssl genrsa -out "$test_dir/test-only.pem" 2048 > /dev/null 2>&1
+          npx --yes crx3@2.0.0 \
+            -p "$test_dir/test-only.pem" \
+            -o "$test_dir/smoke.crx" \
+            -z "$test_dir/smoke.zip" \
+            "$test_dir/extension"
+
+          node scripts/release.mjs verify-crx "$test_dir/smoke.crx"
+          unzip -tq "$test_dir/smoke.zip"
+          unzip -Z1 "$test_dir/smoke.zip" | grep -Fqx manifest.json
+          unzip -Z1 "$test_dir/smoke.zip" | grep -Fqx options.html
+          unzip -Z1 "$test_dir/smoke.zip" | grep -Fqx monitor.html

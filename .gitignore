@@ -33,3 +33,8 @@ desktop.ini
 
 # ---------- 日志 ----------
 *.log
+
+# ---------- Chrome extension release artifacts and signing keys ----------
+*.crx
+*.pem
+.release/

@@ -45,7 +45,13 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 
 ### From release (recommended)
 
-Download the latest `.zip` from [Releases](../../releases), unzip, and load unpacked as above.
+Download the versioned `.zip` from [Releases](../../releases), unzip it, and load the extracted folder with Chrome's **Load unpacked**. A signed `.crx` is also attached for managed environments that permit self-hosted CRX installation.
+
+### Automatic CRX3 and ZIP packaging
+
+Pushing a version tag such as `tag2.3.1`, `v2.3.1` or `2.3.1` triggers GitHub Actions to package the **entire extension** (including settings and cross-tab monitoring pages), sign a CRX3, create a ZIP and publish both with SHA-256 checksums to a GitHub Release. The **tag determines the version in the released manifest**, without modifying source files.
+
+**One-time setup:** add the original extension private key as the GitHub Actions repository secret `CRX_PRIVATE_KEY`. Releases fail clearly if the secret is absent rather than generating a different extension ID. For key generation, exact tag commands, installation restrictions and troubleshooting, see [Automatic CRX3 releases](docs/RELEASE_CRX.md).
 
 ## Usage
 
@@ -108,9 +114,10 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 ├── docs/                   # Detailed documentation
 │   ├── ARCHITECTURE.md     #   How it works (two worlds, message protocol)
 │   └── ADD_PLATFORM.md     #   How to add a new platform
+├── scripts/release.mjs     # Tag parsing, clean extension staging and CRX3 header checks
 ├── .github/workflows/
-│   ├── ci.yml              # JS syntax + manifest validation
-│   ├── release.yml         # Packaging on v* tags
+│   ├── ci.yml              # JS syntax, tests, and disposable package smoke test
+│   ├── release.yml         # Signed CRX3 + ZIP + checksums on numeric version tags
 │   └── automerge.yml       # Auto-merge non-draft PRs
 ├── AGENTS.md               # Notes for AI coding assistants
 ├── CONTRIBUTING.md

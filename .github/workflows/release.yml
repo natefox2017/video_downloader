@@ -1,116 +1,155 @@
-name: release
+name: Package Chrome extension (CRX3 + ZIP)
 
-# Full CI + CRX packaging. Runs ONLY on version tags (v*).
-# Pushing to main or opening a PR never triggers this.
-#
-# Release flow:
-#   1. Bump `version` in manifest.json (e.g. 2.4.0), commit, push to main
-#   2. git tag v2.4.0 && git push origin v2.4.0
-# The tag must match manifest.json's version (v2.4.0 <-> 2.4.0),
-# otherwise the job fails before packaging anything.
-#
-# Signing: for a stable extension ID across releases, add a persistent
-# PEM private key as the CRX_PRIVATE_KEY repository secret. Without it
-# an ephemeral key is generated and the extension ID changes every release.
-
+# Version-tag releases only. Never sign on normal pushes or pull requests.
+# Supported examples: tag0.0.1, v0.0.1, 0.0.1.
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'tag[0-9]*'
+      - 'v[0-9]*'
+      - '[0-9]*'
 
 permissions:
   contents: write
 
+concurrency:
+  group: extension-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Check out tagged source
+        uses: actions/checkout@v4
         with:
-          node-version: '20'
+          fetch-depth: 0
+          persist-credentials: false
 
-      # ---------------- full CI ----------------
-      - name: Full CI - JS syntax check
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify tag points to a commit on main
+        shell: bash
         run: |
-          set -e
-          for f in background.js rules.js content.js panel.js extractors/*.js; do
-            echo "-- node --check $f"
-            node --check "$f"
-          done
-          echo "all extension scripts pass syntax check"
-
-      - name: Full CI - manifest validation
-        run: |
-          node << 'EOF'
-          const fs = require('fs');
-          const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
-
-          // 1. tag version must match manifest version (v2.3.0 -> 2.3.0)
-          const tag = process.env.GITHUB_REF_NAME || '';
-          const tagVer = tag.startsWith('v') ? tag.slice(1) : tag;
-          if (m.version !== tagVer) {
-            throw new Error(`manifest version ${m.version} does not match tag ${tag}`);
-          }
-          if (m.manifest_version !== 3) throw new Error('manifest_version must be 3');
-
-          // 2. every file referenced by the manifest must exist
-          const refs = new Set(['background.js', 'content.js', 'panel.html', 'panel.js', 'panel.css', 'rules.js']);
-          for (const cs of m.content_scripts || []) {
-            for (const f of cs.js || []) refs.add(f);
-          }
-          for (const f of refs) {
-            if (!fs.existsSync(f)) throw new Error(`referenced file missing: ${f}`);
-          }
-
-          // 3. icons must exist
-          for (const p of Object.values(m.icons || {})) {
-            if (!fs.existsSync(p)) throw new Error(`icon missing: ${p}`);
-          }
-
-          // 4. every platform with an extractor in rules.js must be registered in the manifest
-          const rules = fs.readFileSync('rules.js', 'utf8');
-          const registered = new Set();
-          for (const cs of m.content_scripts || []) {
-            for (const f of cs.js || []) {
-              const mm = f.match(/^extractors\/([a-z]+)\.js$/);
-              if (mm) registered.add(mm[1]);
-            }
-          }
-          for (const match of rules.matchAll(/extractor:\s*"([^"]+)"/g)) {
-            if (!registered.has(match[1])) {
-              throw new Error(`extractor not registered in manifest: ${match[1]}`);
-            }
-          }
-
-          console.log(`manifest OK (${m.name} v${m.version}, ${refs.size} files, ${registered.size} extractors)`);
-          EOF
-
-      # ---------------- CRX packaging ----------------
-      - name: Stage extension files
-        run: |
-          rm -rf dist && mkdir -p dist
-          cp manifest.json background.js rules.js content.js panel.html panel.js panel.css dist/
-          cp -r extractors images dist/
-
-      - name: Prepare signing key
-        run: |
-          if [ -n "${{ secrets.CRX_PRIVATE_KEY }}" ]; then
-            printf '%s' "${{ secrets.CRX_PRIVATE_KEY }}" > key.pem
-            echo "Using CRX_PRIVATE_KEY secret (stable extension ID across releases)."
-          else
-            echo "::warning::CRX_PRIVATE_KEY secret not set - generating an ephemeral key. The extension ID will change on every release; add a persistent PEM key as the CRX_PRIVATE_KEY secret for stable updates."
-            openssl genrsa -out key.pem 2048
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::Release tags must point to commits already merged into main."
+            exit 1
           fi
 
-      - name: Pack CRX
+      - name: Validate extension and run tests
+        shell: bash
         run: |
-          npx -y crx@latest pack "$PWD/dist" -p "$PWD/key.pem" -o "$PWD/video-downloader.crx"
-          rm -f key.pem
-          ls -la video-downloader.crx
+          set -euo pipefail
+          node --check scripts/release.mjs
+          for file in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
+            node --check "$file"
+          done
+          node --test tests/*.test.js
 
-      - name: Create GitHub Release
+      - name: Stage complete extension
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release.mjs stage "$GITHUB_REF_NAME" "$PWD" "$PWD/.release/stage/extension"
+          version="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(".release/stage/extension/manifest.json","utf8")).version)')"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Tag $GITHUB_REF_NAME produces extension version $version"
+
+      - name: Sign CRX3 and create unpacked-install ZIP
+        shell: bash
+        env:
+          CRX_PRIVATE_KEY: ${{ secrets.CRX_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CRX_PRIVATE_KEY" ]]; then
+            echo "::error title=Missing signing key::Configure the CRX_PRIVATE_KEY repository Actions secret with the original PEM private key. Refusing to generate a new extension ID."
+            exit 1
+          fi
+
+          umask 077
+          mkdir -p .release/assets
+          key_file="$(mktemp "$RUNNER_TEMP/crx-signing.XXXXXX.pem")"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$CRX_PRIVATE_KEY" > "$key_file"
+          if ! openssl pkey -in "$key_file" -check -noout > /dev/null 2>&1; then
+            echo "::error::CRX_PRIVATE_KEY is not a valid, unencrypted PEM private key."
+            exit 1
+          fi
+
+          # Pin the packer to a CRX3-capable version; no package.json/build chain needed.
+          npx --yes crx3@2.0.0 \
+            -p "$key_file" \
+            -o "$PWD/.release/assets/video-downloader-${VERSION}.crx" \
+            -z "$PWD/.release/assets/video-downloader-${VERSION}.zip" \
+            "$PWD/.release/stage/extension"
+
+      - name: Validate release artifacts and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          crx=".release/assets/video-downloader-${VERSION}.crx"
+          zip=".release/assets/video-downloader-${VERSION}.zip"
+
+          test -s "$crx"
+          test -s "$zip"
+          node scripts/release.mjs verify-crx "$crx"
+          unzip -tq "$zip"
+
+          # ZIP must contain manifest at the archive root and all standalone UI pages.
+          for file in manifest.json options.html options.js monitor.html monitor.js vendor/pico.min.css images/logo.svg LICENSE THIRD_PARTY_NOTICES.md; do
+            unzip -Z1 "$zip" | grep -Fqx "$file" || {
+              echo "::error::Missing packaged file: $file"
+              exit 1
+            }
+          done
+
+          # Never accidentally publish private keys, tests or build scripts.
+          if unzip -Z1 "$zip" | grep -E '(^|/)([^/]*\.pem|key\.pem|tests/|scripts/|\.github/)'; then
+            echo "::error::An internal or secret file was included in the extension ZIP."
+            exit 1
+          fi
+
+          unzip -p "$zip" manifest.json | node -e '
+            let raw = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => raw += chunk);
+            process.stdin.on("end", () => {
+              const manifest = JSON.parse(raw);
+              if (manifest.version !== process.env.VERSION) {
+                throw new Error("Packaged manifest version does not match pushed tag.");
+              }
+              console.log("Packaged manifest version:", manifest.version);
+            });
+          '
+
+          (cd .release/assets && sha256sum "video-downloader-${VERSION}.crx" "video-downloader-${VERSION}.zip" > SHA256SUMS.txt)
+          ls -lh .release/assets/
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: video-downloader.crx
+          name: Video Downloader v${{ steps.version.outputs.version }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            .release/assets/video-downloader-*.crx
+            .release/assets/video-downloader-*.zip
+            .release/assets/SHA256SUMS.txt
+          body: |
+            Automatically packaged from tag ${{ github.ref_name }}.
+
+            - CRX3: signed extension package (use the same private key for future updates).
+            - ZIP: extract it and use Chrome > Extensions > Developer mode > Load unpacked.
+            - SHA256SUMS.txt: file checksums.
+
+            Note: Official Chrome may restrict direct installation of non-Web-Store CRX files.
+            For local development, use the ZIP. Chrome Web Store distribution uses its own publishing flow.

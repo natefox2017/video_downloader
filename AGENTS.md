@@ -28,8 +28,10 @@ bundlers, build tools, or npm dependencies.
 
 ```bash
 # Syntax + manifest validation (CI runs the same set)
-for f in background.js rules.js content.js panel.js extractors/*.js; do node --check "$f"; done
+for f in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do node --check "$f"; done
+node --check scripts/release.mjs
 node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
+node --test tests/*.test.js
 ```
 
 Functional verification (no automated test framework — verify by hand):
@@ -121,9 +123,13 @@ Functional verification (no automated test framework — verify by hand):
 - Commit messages in English, format `type: brief`, types: `feat` / `fix` / `perf` / `docs` / `refactor` / `chore`.
 - Performance-related changes: include measured before/after data in the message body.
 - One commit = one concern; keep formatting changes separate from functional changes.
-- **Releases**: bump `version` in `manifest.json` → commit and push to main → tag `v<version>` and push.
-  `.github/workflows/release.yml` then verifies version consistency, builds the zip, and creates the Release.
-  **Pushing to main never builds — only tags trigger it.**
+- **Releases**: push a numeric version tag (`tag2.3.1`, `v2.3.1`, or `2.3.1`) on a commit
+  already merged to main. `.github/workflows/release.yml` stamps the staged manifest
+  with the tag's version (without editing source), signs CRX3 with the persistent
+  `CRX_PRIVATE_KEY` Actions secret, packages a ZIP, and uploads both plus checksums.
+  Missing secrets are a release error: **never generate an ephemeral key for a public release**.
+  The signing smoke test may use a disposable key only because its artifacts are never shipped.
+  See `docs/RELEASE_CRX.md`. **Pushing to main never publishes — version tags do.**
 
 ---
 
