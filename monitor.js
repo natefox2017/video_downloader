@@ -31,6 +31,7 @@
   let renderRequest = 0;
   let submitting = false;
   let lastFocused = null;
+  let previewTimeoutId = null;
 
   /** Preserve identities even when two tabs expose the same media URL. */
   function videoKey(tabId, shareUrl) {
@@ -71,7 +72,7 @@
 
   /** A completed or running entry must never be dispatched twice. */
   function isEligible(item) {
-    return item.status !== "done" && item.status !== "downloading";
+    return item.status !== "done" && item.status !== "downloading" && item.status !== "finalizing";
   }
 
   /** Return valid tab groups using snapshot data rather than DOM state. */
@@ -118,6 +119,7 @@
   function renderStatus(item) {
     if (item.status === "done") return '<span class="ui-badge ui-badge--done">已完成</span>';
     if (item.status === "error") return '<span class="ui-badge ui-badge--error">下载失败</span>';
+    if (item.status === "finalizing") return '<span class="ui-badge ui-badge--progress">正在保存</span>';
     if (item.status === "downloading") {
       const progress = Math.max(0, Math.min(100, Number(item.progress) || 0));
       return '<span class="ui-badge ui-badge--progress">下载中 ' + Math.floor(progress) + '%</span>';
@@ -271,6 +273,7 @@
 
   /** Ensure modal video and media references are released when closed. */
   function closePreview() {
+    clearTimeout(previewTimeoutId);
     previewVideoEl.pause();
     previewVideoEl.removeAttribute("src");
     previewVideoEl.removeAttribute("poster");
@@ -283,6 +286,7 @@
 
   /** Display a meaningful fallback for missing or unsupported playback sources. */
   function showPreviewMessage(message) {
+    clearTimeout(previewTimeoutId);
     previewVideoEl.pause();
     previewVideoEl.hidden = true;
     previewMessageEl.textContent = message;
@@ -310,12 +314,18 @@
       showPreviewMessage("当前视频没有可用于浏览器预览的播放地址。");
       return;
     }
-    if (/\.m3u8(?:[?#]|$)/i.test(url) && !previewVideoEl.canPlayType("application/vnd.apple.mpegurl")) {
+    if ((item.isHls || /\.m3u8(?:[?#]|$)/i.test(url)) && !previewVideoEl.canPlayType("application/vnd.apple.mpegurl")) {
       showPreviewMessage("此浏览器无法直接预览 HLS (m3u8) 流，请下载后播放。");
       return;
     }
     previewVideoEl.src = url;
     previewVideoEl.load();
+    clearTimeout(previewTimeoutId);
+    previewTimeoutId = setTimeout(() => {
+      if (!previewEl.hidden && previewVideoEl.readyState < 2) {
+        showPreviewMessage("预览加载超时。视频来源已验证，可下载后播放。");
+      }
+    }, 12_000);
     previewVideoEl.play().catch(() => {});
   }
 
@@ -400,6 +410,7 @@
 
   document.querySelector("[data-close-preview]").addEventListener("click", closePreview);
   previewCloseEl.addEventListener("click", closePreview);
+  previewVideoEl.addEventListener("loadeddata", () => clearTimeout(previewTimeoutId));
   previewVideoEl.addEventListener("error", () => {
     if (!previewEl.hidden) showPreviewMessage("视频源无法播放，可能已失效、受网站限制或格式不受支持。");
   });
