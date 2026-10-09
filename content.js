@@ -268,8 +268,8 @@
     shadow.innerHTML = `
       <style>
         .vd-panel {
-          --vd-width: 340px;
-          --vd-max-height: 60vh;
+          --vd-width: 320px;
+          --vd-max-height: 55vh;
           position: fixed;
           top: 16px;
           right: 16px;
@@ -333,7 +333,7 @@
         }
         .vd-panel__body {
           position: relative;
-          height: 240px;
+          height: 180px;
           max-height: var(--vd-max-height);
           min-height: 0;
           background: #ffffff;
@@ -362,7 +362,7 @@
       <div class="vd-panel" id="vd-panel">
         <div class="vd-panel__bar" id="vd-bar">
           <span class="vd-panel__title">
-            视频下载助手
+            视频下载
             <span class="vd-panel__count" id="vd-count"></span>
           </span>
           <span class="vd-panel__actions">
@@ -478,7 +478,7 @@
       panelFrame.contentWindow.postMessage({ source: "vd-content", ...message }, "*");
     }
     const countNode = host?.shadowRoot?.querySelector("#vd-count");
-    if (countNode) countNode.textContent = mediaList.length ? `（共 ${mediaList.length} 条）` : "";
+    if (countNode) countNode.textContent = mediaList.length > 1 ? `· ${mediaList.length}` : "";
   }
 
   function pushMediaList() {
@@ -504,8 +504,8 @@
         // iframe 上报内容高度 → 自适应面板高度（不超过最大高度）
         const body = host?.shadowRoot?.querySelector(".vd-panel__body");
         if (body && typeof data.height === "number" && data.height > 0) {
-          const maxPx = Math.floor(window.innerHeight * 0.60);
-          const h = Math.max(220, Math.min(Math.ceil(data.height), maxPx));
+          const maxPx = Math.floor(window.innerHeight * 0.55);
+          const h = Math.max(140, Math.min(Math.ceil(data.height), maxPx));
           body.style.height = h + "px";
         }
         break;
