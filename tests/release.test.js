@@ -55,13 +55,13 @@ function fixture() {
   return { root, source, target };
 }
 
-test("release tags support tag0.0.1, v0.0.1 and plain 0.0.1", async () => {
+test("release tags only accept v-prefixed Chrome versions", async () => {
   const { parseReleaseTag } = await release;
-  assert.equal(parseReleaseTag("tag0.0.1"), "0.0.1");
-  assert.equal(parseReleaseTag("v2.3.0"), "2.3.0");
-  assert.equal(parseReleaseTag("2.3.0"), "2.3.0");
-  assert.equal(parseReleaseTag("tag1.2.3.4"), "1.2.3.4");
-  for (const bad of ["main", "tag1.2", "tag01.2.3", "v1.2.3-rc1", "tag65536.0.1", "tag1.2.3.4.5"]) {
+  assert.equal(parseReleaseTag("v0.0.1"), "0.0.1");
+  assert.equal(parseReleaseTag("v2.4.0"), "2.4.0");
+  assert.equal(parseReleaseTag("v1.2.3.4"), "1.2.3.4");
+  for (const bad of ["main", "tag0.0.1", "2.4.0", "tag1.2", "v01.2.3",
+    "v1.2.3-rc1", "v65536.0.1", "v1.2.3.4.5"]) {
     assert.throws(() => parseReleaseTag(bad), /Invalid|out of range/);
   }
 });
@@ -71,7 +71,7 @@ test("staging ships all settings, monitor, Pico and extension assets, but never 
   const { root, source, target } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  assert.equal(stageExtension(source, target, "tag0.0.1"), "0.0.1");
+  assert.equal(stageExtension(source, target, "v0.0.1"), "0.0.1");
   const staged = JSON.parse(fs.readFileSync(path.join(target, "manifest.json"), "utf8"));
   const original = JSON.parse(fs.readFileSync(path.join(source, "manifest.json"), "utf8"));
   assert.equal(staged.version, "0.0.1");
@@ -122,4 +122,18 @@ test("CRX3 verifier checks magic, version and non-empty header", async (t) => {
   header.writeUInt32LE(0, 8);
   fs.writeFileSync(file, header);
   assert.throws(() => checkCrx3Header(file), /empty proof header/);
+});
+
+test("version-tag release workflow only listens for v-prefixed tags and creates a store ZIP first", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
+  const builder = fs.readFileSync(path.join(root, "scripts/build-store.sh"), "utf8");
+  assert.match(workflow, /tags:\s*\n\s*- 'v\[0-9\]\*'/);
+  assert.doesNotMatch(workflow, /- 'tag\[0-9\]\*'/);
+  assert.match(workflow, /bash scripts\/build-store\.sh/);
+  assert.match(workflow, /if \[\[ -z "\$CRX_PRIVATE_KEY" \]\]; then/);
+  assert.match(workflow, /Publish packages on GitHub Releases/);
+  assert.match(builder, /esbuild@0\.25\.12/);
+  assert.match(builder, /--minify/);
+  assert.doesNotMatch(builder, /--bundle|obfuscator|javascript-obfuscator/);
+  assert.match(builder, /chrome-web-store\.zip/);
 });

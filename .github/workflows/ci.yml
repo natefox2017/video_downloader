@@ -1,7 +1,7 @@
 name: ci
 
-# Fast repository checks, plus a disposable CRX3 packaging smoke test.
-# Only version tags publish signed releases; CI output is never uploaded.
+# PRs verify production Web Store packaging with an isolated test key.
+# Only v-prefixed version tags create public GitHub Releases.
 on:
   push:
     branches: [main]
@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   repository-policy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -22,10 +23,11 @@ jobs:
         with:
           node-version: '22'
 
-      - name: JavaScript syntax
+      - name: JavaScript and Bash syntax
         run: |
           set -euo pipefail
           node --check scripts/release.mjs
+          bash -n scripts/build-store.sh
           for file in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
             node --check "$file"
           done
@@ -36,22 +38,28 @@ jobs:
       - name: Unit and regression tests
         run: node --test tests/*.test.js
 
-      - name: CRX3 and ZIP smoke test (ephemeral key, never published)
+      - name: Test exact Chrome Web Store packaging and optional CRX signing
+        shell: bash
         run: |
           set -euo pipefail
           test_dir="$(mktemp -d)"
           trap 'rm -rf "$test_dir"' EXIT
 
-          node scripts/release.mjs stage tag0.0.1 "$PWD" "$test_dir/extension"
+          # CI uses the same production packager as the release job.
+          source_manifest_sha="$(sha256sum manifest.json | cut -d' ' -f1)"
+          bash scripts/build-store.sh v2.4.0 "$test_dir/output"
+          test "$(sha256sum manifest.json | cut -d' ' -f1)" = "$source_manifest_sha"
+          stage="$test_dir/output/stage/extension"
+          zip="$test_dir/output/assets/video-downloader-v2.4.0-chrome-web-store.zip"
+          test -s "$zip"
+          unzip -tq "$zip"
+          test "$(unzip -p "$zip" manifest.json | node -e 'let input=""; process.stdin.on("data", data => input+=data); process.stdin.on("end", () => process.stdout.write(JSON.parse(input).version));')" = "2.4.0"
+
+          # CRX signing itself is smoke-tested with an ephemeral, never-published key.
           openssl genrsa -out "$test_dir/test-only.pem" 2048 > /dev/null 2>&1
           npx --yes crx3@2.0.0 \
             -p "$test_dir/test-only.pem" \
             -o "$test_dir/smoke.crx" \
             -z "$test_dir/smoke.zip" \
-            "$test_dir/extension"
-
+            "$stage"
           node scripts/release.mjs verify-crx "$test_dir/smoke.crx"
-          unzip -tq "$test_dir/smoke.zip"
-          unzip -Z1 "$test_dir/smoke.zip" | grep -Fqx manifest.json
-          unzip -Z1 "$test_dir/smoke.zip" | grep -Fqx options.html
-          unzip -Z1 "$test_dir/smoke.zip" | grep -Fqx monitor.html

@@ -1,94 +1,72 @@
-# Automatic CRX3 releases
+# Chrome Web Store release workflow
 
-The extension is released by pushing a **version Git tag**. Normal commits and pull requests do not publish a Release.
+Push a **v-prefixed Git Tag**, such as **v2.4.0**, on a commit already merged into main. GitHub Actions then creates a **minified, Chrome Web Store-ready ZIP**. If you have configured your original CRX signing key, it also produces an optional signed CRX3.
 
-## One-time signing setup
-
-A consistent private key is essential: Chrome derives the extension ID from the signing key. **Never generate a different key for each release.** If you have already distributed this extension as a CRX, use the **original private key** to preserve its ID.
-
-If this is the first CRX release, generate a key locally:
-
-~~~bash
-openssl genrsa -out video-downloader.pem 2048
-~~~
-
-Back up that file securely, then add the PEM **contents** as an Actions repository secret:
-
-- GitHub repository → **Settings → Secrets and variables → Actions**
-- **New repository secret**
-- Name: **CRX_PRIVATE_KEY**
-- Value: the complete private-key PEM, including BEGIN/END lines
-
-Alternatively, with GitHub CLI installed and authenticated:
-
-~~~bash
-gh secret set CRX_PRIVATE_KEY --repo natefox2017/video_downloader < video-downloader.pem
-~~~
-
-Do not commit, upload to Releases, or share the PEM. The workflow stores it temporarily only while signing and removes the temporary file afterwards. Missing/invalid keys cause release failure; a disposable key is used **only in the PR smoke test**, never for public releases.
-
-## Publish a new version
-
-Tag the latest reviewed commit on main:
+## 1. Release v2.4.0
 
 ~~~bash
 git checkout main
 git pull --ff-only origin main
-git tag -a tag2.3.1 -m "Release 2.3.1"
-git push origin tag2.3.1
+git tag -a v2.4.0 -m "Release v2.4.0"
+git push origin v2.4.0
 ~~~
 
-The following version tags are accepted:
+The workflow **only runs on tags starting with v** followed by a valid numeric Chrome version (`v2.4.0`, optionally `v2.4.0.1`). Ordinary commits, PRs, `tag2.4.0`, and unprefixed tags will not publish releases.
 
-| Git tag | Version packaged in manifest.json |
-| --- | --- |
-| tag0.0.1 | 0.0.1 |
-| v2.3.1 | 2.3.1 |
-| 2.3.1 | 2.3.1 |
+Your tag must point to a commit that is already on main. The packager updates **only the staged manifest** to `2.4.0`: the source manifest in Git is not modified. If updating an existing Chrome Web Store listing, choose a version higher than the version already published.
 
-Use three or four numeric components, each 0–65535, without prerelease suffixes.
+## 2. Download the Chrome Web Store package
 
-The workflow uses the **tag's version for the staged release manifest**. It does not commit modifications to the source manifest. For easier local testing, updating the source manifest version before tagging is still recommended. For real updates, choose a version greater than the previously installed extension's version.
+After the [GitHub Actions release workflow](../.github/workflows/release.yml) succeeds, open [GitHub Releases](../../releases). For v2.4.0 it provides:
 
-The tag must point to a commit already on main, and must include the release workflow files. A tag on an unmerged branch is rejected before signing.
+- **video-downloader-v2.4.0-chrome-web-store.zip** — upload this file to the Chrome Web Store.
+- **SHA256SUMS.txt** — checksums for every published build asset.
+- **video-downloader-v2.4.0.crx** — *optional* signed CRX3, only when a persistent signing key is configured. **Do not upload this to the Chrome Web Store.**
 
-## What the workflow produces
+The ZIP contains `manifest.json` at its root, all required HTML/CSS/JS, Pico CSS, icons, extraction scripts, and MIT license notices. It excludes development tests, GitHub workflows, source maps, local private keys, and build scripts.
 
-[.github/workflows/release.yml](../.github/workflows/release.yml) runs the following:
+Code is minimized using **esbuild@0.25.12** on the individual JS files without bundling them. This removes comments and unnecessary whitespace, simplifies code, and shortens local variable names while preserving the existing cross-script global bindings.
 
-1. Validate the tag, extension assets, JavaScript, and repository tests.
-2. Build a clean unpacked extension directory containing all HTML/CSS/JS entry points, icon assets, extractors, and vendored CSS.
-3. Sign a **CRX3** with the persistent **CRX_PRIVATE_KEY** secret, using the pinned open-source package **crx3@2.0.0** on Node.js 22.
-4. Create a ZIP from those same staged extension files.
-5. Validate the CRX3 header, ZIP root layout, manifest version, and absence of PEM files.
-6. Upload both packages and **SHA256SUMS.txt** to a GitHub Release.
+### Why not encrypt/obfuscate JS?
 
-Files are named:
+Chrome Web Store's [Code Readability Requirements](https://developer.chrome.com/docs/webstore/program-policies/code-readability) **prohibit intentionally obfuscated code or concealed extension functionality**. Standard minification is allowed, but encryption, encoded strings, runtime-decryption loaders, control-flow obfuscation, and similar hiding techniques can lead to rejection.
 
-- video-downloader-2.3.1.crx
-- video-downloader-2.3.1.zip
-- SHA256SUMS.txt
+The repository remains fully open source. Only the **release output** is minified, and no runtime remote code is introduced.
 
-To check downloaded artifacts, keep the three files in one directory and run:
+## 3. Submit the ZIP to Chrome Web Store
+
+1. Open the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole) with your verified developer account.
+2. Create a new item or open your existing item, then upload **video-downloader-v2.4.0-chrome-web-store.zip** (not the CRX).
+3. Complete the store listing, icons/screenshots, privacy disclosures and single-purpose description. Describe why the extension needs `<all_urls>` and `storage`, and explain that the cross-tab video registry is in `chrome.storage.session`.
+4. Test the exact extracted ZIP in Chrome, including real site extraction, downloads, settings, and cross-tab batch handling. Confirm no errors in the extension Service Worker.
+5. Submit for review. A correctly formed ZIP is only the technical prerequisite; **Google determines approval** after its policy/functionality/privacy review.
+
+Reference: [Google's official publishing guide](https://developer.chrome.com/docs/webstore/publish).
+
+## 4. Optional signed CRX3
+
+The Chrome Web Store ZIP **works without any signing secret**. To also publish a self-hosted CRX3 with a stable extension ID, store your **original** PEM private key in the GitHub Actions repository secret **CRX_PRIVATE_KEY**:
+
+GitHub repository → **Settings → Secrets and variables → Actions → New repository secret**.
+
+For a new self-hosted CRX3 project with no existing key:
 
 ~~~bash
-sha256sum -c SHA256SUMS.txt
+openssl genrsa -out video-downloader.pem 2048
+gh secret set CRX_PRIVATE_KEY --repo natefox2017/video_downloader < video-downloader.pem
 ~~~
 
-## Installation and Chrome restrictions
+Securely back up the PEM. Never commit or attach it to a release. Losing or replacing this key changes the extension ID for self-hosted CRX updates. The Chrome Web Store uses its own signing/distribution flow.
 
-**ZIP**: extract it, visit chrome://extensions/, enable Developer mode, and use **Load unpacked**. This is the recommended manual installation method.
+## 5. Diagnostics
 
-**CRX3**: the signed CRX is suitable for managed/self-hosted extension delivery where browser policies allow it. Modern official Chrome may block installing non-Chrome-Web-Store CRX files directly; generating a valid CRX3 does **not** bypass Chrome's installation restrictions. Chrome Web Store publishing uses a separate upload/review flow and is **not** configured by this workflow.
-
-If the signing key is lost, a new key produces a new extension ID. Back up the original key before your first release.
-
-## Common failures
-
-| Error | Fix |
+| Problem | Solution |
 | --- | --- |
-| Missing signing key | Set the Actions secret **CRX_PRIVATE_KEY** before pushing the tag. |
-| Invalid release tag | Use a numeric tag like **tag2.3.1**; avoid spaces and prerelease suffixes. |
-| Tag not on main | Merge the release commit to main first, then create a new tag on main. |
-| Referenced file missing | Verify the files linked by manifest.json and standalone HTML pages are in the repository. |
-| Downloaded CRX not installable in Chrome | Use the ZIP with Load unpacked, or distribute through Chrome Web Store / managed policies. |
+| Workflow did not start | Push a `vX.Y.Z` tag, e.g. `v2.4.0`, from a main commit that already includes the workflow. |
+| Tag rejected by parser | Use three or four integer components 0–65535 with no prerelease suffix. |
+| Missing signing key | This is fine for Chrome Web Store; only the optional CRX3 is skipped. |
+| ZIP file rejected by the dashboard | Verify it contains a root `manifest.json`, version has increased, and all referenced files exist. |
+| Extension flagged as obfuscated | Do not use obfuscation; this release pipeline only runs ordinary esbuild minification. |
+| Extension under extended review | Review `<all_urls>` permissions, privacy disclosures, code readability, remote code restrictions and real-world functionality. |
+
+CI runs the same production ZIP build with tag `v2.4.0`, plus a **throwaway-key CRX3 smoke test that is never released**.

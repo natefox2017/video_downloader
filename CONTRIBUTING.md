@@ -15,6 +15,7 @@ CI runs the same checks:
 ```bash
 for f in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do node --check "$f"; done
 node --check scripts/release.mjs
+bash -n scripts/build-store.sh
 node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
 node --test tests/*.test.js
 ```
@@ -47,4 +48,4 @@ Read [AGENTS.md](AGENTS.md) before making structural changes — it documents in
 
 ## Automatic releases
 
-Push a numeric version tag on main to trigger the CRX3 and ZIP release workflow. A persistent `CRX_PRIVATE_KEY` GitHub Actions secret is required for signed CRX releases. See [CRX3 release instructions](docs/RELEASE_CRX.md); never commit PEM signing keys.
+Push a `v`-prefixed version tag such as `v2.4.0` on main to build a production-minified **Chrome Web Store ZIP**. The optional self-hosted CRX3 uses the persistent `CRX_PRIVATE_KEY` GitHub Actions secret; the store ZIP does not need this secret. Standard JS minification is allowed by the Chrome Web Store, but deliberate obfuscation/encryption is not. See [Chrome Web Store release instructions](docs/RELEASE_CRX.md). Never commit PEM signing keys.

@@ -30,6 +30,7 @@ bundlers, build tools, or npm dependencies.
 # Syntax + manifest validation (CI runs the same set)
 for f in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do node --check "$f"; done
 node --check scripts/release.mjs
+bash -n scripts/build-store.sh
 node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
 node --test tests/*.test.js
 ```
@@ -123,13 +124,16 @@ Functional verification (no automated test framework — verify by hand):
 - Commit messages in English, format `type: brief`, types: `feat` / `fix` / `perf` / `docs` / `refactor` / `chore`.
 - Performance-related changes: include measured before/after data in the message body.
 - One commit = one concern; keep formatting changes separate from functional changes.
-- **Releases**: push a numeric version tag (`tag2.3.1`, `v2.3.1`, or `2.3.1`) on a commit
-  already merged to main. `.github/workflows/release.yml` stamps the staged manifest
-  with the tag's version (without editing source), signs CRX3 with the persistent
-  `CRX_PRIVATE_KEY` Actions secret, packages a ZIP, and uploads both plus checksums.
-  Missing secrets are a release error: **never generate an ephemeral key for a public release**.
-  The signing smoke test may use a disposable key only because its artifacts are never shipped.
-  See `docs/RELEASE_CRX.md`. **Pushing to main never publishes — version tags do.**
+- **Releases**: push a `v`-prefixed version tag (e.g. `v2.4.0`) pointing to
+  a commit already merged to main. `.github/workflows/release.yml` runs
+  `scripts/build-store.sh`, which stages the extension, stamps the tagged version
+  into the packaged manifest, and minifies individual JS files using pinned esbuild
+  **without bundling or obfuscation** (Chrome Web Store prohibits hidden functionality).
+  It publishes a Chrome Web Store ZIP plus checksums. A signed self-hosted CRX3 is
+  **optional**: it is only built with the persistent `CRX_PRIVATE_KEY` secret;
+  no ephemeral key is ever generated for a public release. CI may use throwaway
+  keys for tests because it never publishes those artifacts. See `docs/RELEASE_CRX.md`.
+  **Pushing to main never publishes — v-prefixed version tags do.**
 
 ---
 
