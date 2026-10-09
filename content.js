@@ -533,7 +533,7 @@
             </button>
             <button class="vd-panel__btn" id="vd-collapse" title="折叠 / 展开" aria-label="折叠 / 展开">
               <span class="vd-collapse__minus">−</span>
-              <svg class="vd-collapse__download" viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="vd-collapse__download" viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 4v15m0 0 6-6m-6 6-6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             <button class="vd-panel__btn" id="vd-close" title="关闭面板（不影响正在进行的下载）">✕</button>
           </span>

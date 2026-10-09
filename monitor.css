@@ -1,84 +1,34 @@
 /*
- * monitor.css — Light layout overrides for the separate monitoring page.
- * All form inputs, buttons, and details elements use the vendored Pico CSS.
+ * monitor.css — Video monitoring content inside the shared sidebar admin shell.
+ * Pico CSS provides buttons, checkboxes, and the native details element.
  */
-.monitor-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: .9rem;
-}
-.monitor-heading h1 { font-size: 1.35rem; margin: 0 0 .35rem; }
-.monitor-heading p { font-size: .88rem; color: #6b7280; margin: 0; line-height: 1.5; }
-.monitor-heading button { width: auto; white-space: nowrap; margin: 0; }
-.monitor-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .75rem;
-  flex-wrap: wrap;
-  padding: .6rem .8rem;
-  border: 1px solid #e5e7eb;
-  border-radius: .5rem;
-  background: #fafafa;
-  margin-bottom: .75rem;
-}
-.select-all-label { display: inline-flex; align-items: center; gap: .55rem; font-weight: 500; margin: 0; }
+.monitor-page-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.monitor-page-header button { flex: 0 0 auto; width: auto; margin: 0; padding: 9px 14px; font-size: 13px; }
+.monitor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid #e5e7eb; margin-bottom: 16px; }
+.monitor-toolbar h2 { margin: 0 0 5px; }
+#registry-summary { color: #64748b; font-size: 12px; }
+.select-all-label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
 .select-all-label input { margin: 0; }
-#registry-summary { color: #6b7280; }
-.monitor-empty {
-  padding: 2rem 1rem;
-  margin-bottom: .75rem;
-  border: 1px dashed #d1d5db;
-  border-radius: .5rem;
-  color: #6b7280;
-  text-align: center;
-}
+.monitor-empty { padding: 30px 15px; margin-bottom: 12px; text-align: center; font-size: 13px; line-height: 1.6; color: #64748b; background: #f8fafc; border: 1px dashed #d1d5db; border-radius: 7px; }
 .monitor-empty[hidden] { display: none; }
-.tab-group {
-  overflow: hidden;
-  border: 1px solid #e5e7eb;
-  border-radius: .5rem;
-  background: #fff;
-  margin: 0 0 .75rem;
-  padding: 0;
-}
-.tab-group > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .75rem;
-  min-width: 0;
-  padding: .8rem .85rem;
-  margin: 0;
-  background: #f9fafb;
-  cursor: pointer;
-}
-.tab-group > summary::marker { color: #6b7280; }
-.tab-group > summary strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
-.tab-group > summary small { flex: 0 0 auto; color: #6b7280; }
+.tab-group { margin: 0 0 12px; padding: 0; overflow: hidden; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }
+.tab-group > summary { display: flex; justify-content: space-between; align-items: center; gap: 14px; min-width: 0; margin: 0; padding: 12px 14px; background: #f8fafc; cursor: pointer; }
+.tab-group > summary::marker { color: #64748b; }
+.tab-group > summary strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.tab-group > summary small { flex: 0 0 auto; font-size: 12px; color: #64748b; }
 .tab-group[open] > summary { border-bottom: 1px solid #e5e7eb; }
-.video-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: .65rem;
-  margin: 0;
-  padding: .7rem .85rem;
-  border-bottom: 1px solid #f1f3f5;
-  cursor: pointer;
-}
+.video-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 11px; margin: 0; padding: 12px 14px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
 .video-row:last-child { border-bottom: 0; }
 .video-row input { margin: 0; }
-.video-row.is-complete { opacity: .58; cursor: default; }
-.video-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.video-meta { white-space: nowrap; font-size: .8rem; color: #6b7280; }
-.monitor-actions { border-top: 1px solid #e5e7eb; padding-top: .85rem; margin-top: .5rem; }
-.monitor-actions button { width: 100%; margin: 0; }
-.download-status { margin: .5rem 0 0; color: #6b7280; font-size: .83rem; min-height: 1.2em; }
-@media (max-width: 650px) {
-  .monitor-heading { align-items: center; }
-  .video-row { grid-template-columns: auto minmax(0, 1fr); }
+.video-row.is-complete { opacity: .6; cursor: default; }
+.video-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.video-meta { flex: 0 0 auto; color: #64748b; font-size: 12px; white-space: nowrap; }
+.monitor-actions { padding-top: 17px; margin-top: 5px; border-top: 1px solid #e5e7eb; }
+.monitor-actions button { margin: 0; width: 100%; }
+.download-status { min-height: 1.3em; margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: #64748b; }
+@media (max-width: 560px) {
+  .monitor-page-header { align-items: flex-start; }
+  .video-row { grid-template-columns: 18px minmax(0, 1fr); }
   .video-meta { grid-column: 2; }
+  .tab-group > summary { display: grid; grid-template-columns: minmax(0,1fr); gap: 4px; }
 }

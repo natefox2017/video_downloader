@@ -3,77 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>视频下载 - 设置</title>
+  <title>视频下载 - 插件设置</title>
   <link rel="stylesheet" href="vendor/pico.min.css" />
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
-  <main class="container">
-    <nav class="app-nav" aria-label="页面导航">
-      <ul>
-        <li><img class="app-logo" src="images/128.png" alt="" /></li>
-        <li><strong>视频下载</strong> <small id="version"></small></li>
-      </ul>
-      <ul>
-        <li><a href="monitor.html">视频监测与批量下载</a></li>
-        <li><a href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a></li>
-        <li><a href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">反馈 Bug</a></li>
-      </ul>
-    </nav>
-
-    <section>
-      <h2>下载设置</h2>
-      <div class="settings-grid">
-        <div class="settings-field">
-          <label for="format">视频格式</label>
-          <select id="format">
-            <option value="source">源格式（推荐）</option>
-            <option value="mp4">MP4 优先（有 MP4 源时）</option>
-          </select>
-          <small>不转码，只调整现有视频源的下载优先级。</small>
-        </div>
-        <div class="settings-field">
-          <label for="quality">默认清晰度</label>
-          <select id="quality"></select>
-          <small>仅在页面提供多个清晰度时生效。</small>
-        </div>
+  <div class="app-layout">
+    <aside class="app-sidebar" aria-label="应用侧边栏">
+      <a class="brand" href="monitor.html" aria-label="视频下载助手首页">
+        <img class="brand__logo" src="images/logo.svg" width="60" height="60" alt="" />
+        <span class="brand__text">
+          <strong>视频下载助手</strong>
+          <small id="version"></small>
+        </span>
+      </a>
+      <nav class="side-nav" aria-label="功能菜单">
+        <span class="side-nav__heading">功能</span>
+        <a class="side-nav__link" href="monitor.html">批量下载</a>
+        <a class="side-nav__link is-active" href="options.html" aria-current="page">插件设置</a>
+      </nav>
+      <div class="sidebar-support">
+        <span class="side-nav__heading">项目</span>
+        <a class="side-nav__link" href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a>
+        <a class="side-nav__link" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">反馈 Bug</a>
       </div>
-      <label>
-        <input id="remember-position" type="checkbox" role="switch" />
-        记住浮动面板位置
-      </label>
-    </section>
+    </aside>
 
-    <section>
-      <h2>各平台解析方式</h2>
-      <p class="section-hint">智能模式使用平台默认方式，另一种方式仍可作为回退。</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>平台</th><th>默认方式</th><th>当前设置</th></tr></thead>
-          <tbody id="platform-strategies"></tbody>
-        </table>
+    <main class="app-main" id="main-content">
+      <div class="page-content">
+        <header class="page-header">
+          <h1>插件设置</h1>
+          <p>设置下载偏好与各平台的视频识别方式</p>
+        </header>
+
+        <section class="surface" aria-labelledby="download-settings-title">
+          <h2 id="download-settings-title">下载设置</h2>
+          <div class="settings-grid">
+            <div class="settings-field">
+              <label for="format">视频格式</label>
+              <select id="format">
+                <option value="source">源格式（推荐）</option>
+                <option value="mp4">MP4 优先（有 MP4 源时）</option>
+              </select>
+              <p class="field-help">不转码，只调整已有视频源的优先级。</p>
+            </div>
+            <div class="settings-field">
+              <label for="quality">默认清晰度</label>
+              <select id="quality"></select>
+              <p class="field-help">只在网站提供多个清晰度时生效。</p>
+            </div>
+          </div>
+          <div class="setting-switch">
+            <label for="remember-position">
+              <input id="remember-position" type="checkbox" role="switch" />
+              记住浮动面板位置
+            </label>
+          </div>
+        </section>
+
+        <section class="surface" aria-labelledby="platform-settings-title">
+          <h2 id="platform-settings-title">各平台解析方式</h2>
+          <p class="section-hint">默认采用平台最合适的方式，必要时可以手动切换优先级。</p>
+          <div class="table-wrap">
+            <table class="platform-table">
+              <thead><tr><th scope="col">平台</th><th scope="col">默认方式</th><th scope="col">当前设置</th></tr></thead>
+              <tbody id="platform-strategies"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="surface" id="about-feedback" aria-labelledby="feedback-title">
+          <h2 id="feedback-title">问题反馈</h2>
+          <p class="section-hint">下载失败时，可以附上问题网页、视频标题及控制台报错。不要公开 Cookie 或包含私密 Token 的视频链接。</p>
+          <div class="feedback-actions">
+            <a class="secondary outline" role="button" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">提交 Bug</a>
+            <a class="secondary outline" role="button" href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">查看开源仓库</a>
+          </div>
+        </section>
+        <footer class="page-footer">界面基于 Pico CSS 2.1.1（MIT）</footer>
       </div>
-    </section>
-
-
-    <section>
-      <h2>Bug 反馈</h2>
-      <ol>
-        <li>先在 <code>chrome://extensions/</code> 重新加载插件并刷新问题网页。</li>
-        <li>再次复现问题，记录网站、视频标题和具体表现。</li>
-        <li>如果有报错，把页面控制台或扩展 Service Worker 控制台的错误一起附上。</li>
-        <li>到 GitHub Issues 提交问题；涉及登录/私密页面时不要粘贴 Cookie、Token 或带敏感参数的地址。</li>
-      </ol>
-      <p>
-        <a role="button" class="secondary" href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">提交 Bug</a>
-        <a role="button" class="secondary outline" href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">查看源码</a>
-      </p>
-    </section>
-
-    <footer>
-      <small>基于 Pico CSS 2.1.1（MIT） · <a href="monitor.html">前往视频监测</a></small>
-    </footer>
-  </main>
+    </main>
+  </div>
   <script src="rules.js"></script>
   <script src="options.js"></script>
 </body>
