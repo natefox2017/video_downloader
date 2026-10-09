@@ -12,12 +12,12 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 ## Features
 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
-- **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
+- **Verified generic sniffing**: page `<video>` elements and matching network requests become entries only after the extension service worker validates MIME/container bytes or a video HLS manifest; standalone audio and media chunks are filtered
 - **Extension icon badge**: shows the number of detected videos on the current tab in real time, over a blue rounded-square icon with one centered white downward arrow (16/32/48/128px PNG)
 - **Cross-tab video monitor**: the Batch Download item in the shared left sidebar opens a standalone Monitor page aggregating videos from all open tabs
 - **Settings page**: sidebar-style admin UI for source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, per-site batch concurrency and remembered panel position; repository and bug-report links live in the sidebar
 - **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status. The content height adapts to the number of rows; only lists exceeding the 480px body cap (or the remaining viewport) scroll
-- **Batch downloads**: multi-select, per-site checkboxes, filtered search, independent tab identities, per-item progress and concurrent dispatch to originating tabs
+- **Batch downloads**: multi-select, per-site checkboxes, filtered search, independent tab identities, real transfer-byte progress, a 20-second idle-transfer timeout and adaptive memory-bounded concurrency
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
 - **Zero build step**: vanilla JS, no frameworks, no dependencies, no bundler
@@ -149,14 +149,17 @@ Page
  │        │                                 │ fetch (host_permissions,
  │        │ window.postMessage              │        no CORS limits)
  │        ▼                                 │
- │   normalized media objects ────────────▶ │──▶ Blob ──▶ download
+ │   normalized media objects ────────────▶ │──▶ Background Range/MIME probe
+ │                                          │     │ verified only
+ │                                          │     ▼
+ │                                          │──▶ Blob ──▶ download
  │                                          │
  └──────────────────────────────────────────┘
               Shadow DOM host → panel.html/js (iframe, UI only)
                              → viewport preview dialog (sibling of panel)
 ```
 
-**Why two worlds**: page JS variables are only readable from the main world, so extraction runs there; downloading requires bypassing CORS, which only the isolated world can do. Extractors never download.
+**Why the separate contexts**: page JS variables are read in the main world, which reports candidate URLs to the isolated content script. Cross-origin validation runs in the extension service worker (which has the declared host permissions). Actual downloads still use the existing tab-local content-script fetch/Blob pipeline; **MV3 content-script fetch remains subject to CORS**, so a CDN that denies cross-origin access may still prevent a download. Extractors never download.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
@@ -165,8 +168,9 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 - **Direct links**: candidate URLs are ordered by the saved format / quality preference when real variant metadata is available, then tried with fallback
 - **m3u8**: master-playlist variants follow the saved quality preference when resolution metadata is present → segments downloaded concurrently (6 workers) → merged
 - **DASH video-only** (e.g. Bilibili): separate audio track downloaded automatically as `*_audio.m4a`
-- **Concurrency**: a per-originating-tab preference (2/4/6/8 concurrent videos; 4 by default; automatic mode available) caps the adaptive estimate of `memory budget × 70% ÷ avg video size` (2–16 workers). Heap pressure is still monitored live. Multiple tabs run independently; this is not a global concurrency cap
+- **Concurrency**: a per-originating-tab preference (2/4/6/8 concurrent videos; 4 by default; automatic mode available) caps the adaptive estimate of `memory budget × 70% ÷ avg video size` (2–16 workers), additionally limited to approximately 512 MiB of concurrently fetched known video sizes (unknown sizes default to two concurrent workers). Heap pressure is still monitored live. Multiple tabs run independently; this is not a global concurrency cap
 - **Encrypted streams** (`EXT-X-KEY`): reported as unsupported, never silently skipped
+- **Media verification**: the service worker probes at most the first 16 KiB, rejects HTML/audio/isolated segments, and publishes videos only when source evidence is present. Signed URLs can expire after verification; final download failures remain visible as errors rather than indefinite progress.
 
 ## Contributing
 
