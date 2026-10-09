@@ -8,6 +8,7 @@
   const SETTINGS_KEY = "vd_settings";
   const formatEl = document.getElementById("format");
   const qualityEl = document.getElementById("quality");
+  const concurrencyEl = document.getElementById("concurrency");
   const rememberEl = document.getElementById("remember-position");
   const strategiesEl = document.getElementById("platform-strategies");
 
@@ -27,6 +28,7 @@
   async function saveSettings() {
     settings.format = formatEl.value;
     settings.quality = qualityEl.value;
+    settings.batchConcurrency = Number(concurrencyEl.value) || 0;
     settings.rememberPanelPosition = rememberEl.checked;
     settings.platformStrategies = {};
     strategiesEl.querySelectorAll("select[data-platform]").forEach((select) => {
@@ -42,6 +44,8 @@
       .join("");
     formatEl.value = settings.format || DEFAULT_SETTINGS.format;
     qualityEl.value = settings.quality || DEFAULT_SETTINGS.quality;
+    const concurrency = Number(settings.batchConcurrency ?? DEFAULT_SETTINGS.batchConcurrency);
+    concurrencyEl.value = concurrency > 0 ? String(concurrency) : "auto";
     rememberEl.checked = settings.rememberPanelPosition !== false;
 
     strategiesEl.innerHTML = [...PLATFORMS, GENERIC_PLATFORM].map((platform) => {
@@ -53,7 +57,7 @@
       return `<tr>
         <td>${escapeHtml(platform.name)}</td>
         <td><small>${defaultText}</small></td>
-        <td><select data-platform="${escapeHtml(platform.id)}" aria-label="${escapeHtml(platform.name)}解析方式">${options}</select></td>
+        <td><span class="ui-select-wrap"><select class="ui-select" data-platform="${escapeHtml(platform.id)}" aria-label="${escapeHtml(platform.name)}解析方式">${options}</select></span></td>
       </tr>`;
     }).join("");
   }
@@ -74,7 +78,7 @@
   }
 
   document.addEventListener("change", (event) => {
-    if (event.target.matches("#format, #quality, #remember-position, select[data-platform]")) {
+    if (event.target.matches("#format, #quality, #concurrency, #remember-position, select[data-platform]")) {
       saveSettings().catch(() => {});
     }
   });
