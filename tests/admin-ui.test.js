@@ -30,8 +30,8 @@ test("monitor and options share a responsive, local component system", () => {
   const ui = read("ui.css");
   assert.match(ui, /\.ui-button\s*\{/);
   assert.match(ui, /\.ui-checkbox\s*\{[^}]*appearance:\s*none;/s);
-  assert.match(ui, /\.ui-select\s*\{[^}]*appearance:\s*none;/s);
-  assert.match(ui, /\.ui-switch\s*\{[^}]*appearance:\s*none;/s);
+  assert.match(ui, /select\.ui-select:not\(\[multiple\], \[size\]\)\s*\{[^}]*appearance:\s*none;/s);
+  assert.match(ui, /input\.ui-switch\[type="checkbox"\]\[role="switch"\]\s*\{[^}]*appearance:\s*none;/s);
 });
 
 test("settings render their labels, help text, and concurrency selection separately", () => {
