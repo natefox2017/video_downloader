@@ -7,7 +7,8 @@ Chrome extensions run content scripts in an **isolated world**, separate from th
 | Need | World | Why |
 |---|---|---|
 | Read player data (`window.player`, `window.__playinfo__`, `__INITIAL_STATE__`) | Main | Page JS variables are invisible from the isolated world |
-| Download media URLs (bypass CORS) | Isolated | Only the extension context has `host_permissions`; page `fetch` is blocked by CSP |
+| Probe media bytes across origins | Extension service worker | MV3 host permissions apply to extension fetches, not to content-script cross-origin requests |
+| Download verified media | Isolated | Existing page-tab fetch/Blob pipeline retains its per-tab workers; cross-origin CORS restrictions may still apply |
 
 So the pipeline is split:
 
@@ -16,10 +17,12 @@ extractors/*.js (main world)
   → read player data → normalize to media objects
   → window.postMessage → content.js (isolated world)
   → dedup + merge with DOM scan + resource sniffing
-  → fetch → Blob → <a download>
+  → background.js bounded Range verification (MIME + signatures / HLS)
+  → only confirmed videos appear in panel/monitor
+  → tab fetch → Blob → <a download>
 ```
 
-**Rule**: extractors never download. Content script never reads page JS variables directly.
+**Rule**: extractors never download. Content script never reads page JS variables directly. The service worker verifies untrusted candidate URLs (up to 16 KiB) with host permissions; this does not lift CORS for the subsequent content-script download.
 
 ## Components
 
@@ -69,13 +72,13 @@ Extractors poll every ~1.5s (SPA navigation doesn't reload the page).
 
 ### content.js — isolated world
 
-Three ingestion paths merged into one registry:
+Three ingestion paths merged into one registry, with an asynchronous verification gate:
 
 1. **Extractor reports** (`media_found` via `window.postMessage`)
 2. **DOM scan** — `<video>` elements
 3. **Resource sniffing** — `PerformanceObserver` on resource entries
 
-Plus: floating panel host (Shadow DOM + iframe), independently layered video-preview dialog (sibling in the same shadow root), download scheduler, concurrency control.
+Audio URLs, isolated .ts/.m4s chunks, and HTML/error responses are not confirmed standalone videos. Unverified entries are not published to the badge, floating panel or cross-tab monitor. Plus: floating panel host (Shadow DOM + iframe), independently layered video-preview dialog (sibling in the same shadow root), download scheduler, concurrency control.
 
 ### panel.* — UI (iframe)
 
@@ -110,6 +113,7 @@ Same-window `window.postMessage`, distinguished by `source` field:
 
 ### content.js → background.js
 
+- `chrome.runtime.sendMessage({ type: "probe_media_url", url })` — service worker checks a bounded Range response and reports `{ok, media:{url,size,kind}}`; only verified video URLs enter any list
 - `chrome.runtime.sendMessage({ type: "update_badge", count })`
 - `chrome.runtime.sendMessage({ type: "update_media_registry", pageUrl, pageTitle, platform, items })` — title, cover, preview URL, quality, status, progress and the per-tab media key only
 - `chrome.runtime.sendMessage({ type: "get_media_registry" })` — monitor reads the latest per-tab snapshot
@@ -126,7 +130,7 @@ Adaptive worker pool, not hardcoded:
    - Budget source priority: `performance.memory.jsHeapSizeLimit` → `navigator.deviceMemory / 2` → fallback constant
 2. **Live guard**: workers check heap before taking tasks; pause above 85%, resume below 60%
 
-Workers start staggered (40ms apart). Shared cursor distributes tasks within each tab. Multiple tabs may download concurrently and each has an independent worker cap, not a global limit. m3u8 segments use a separate 6-worker pool.
+Known very large sources also cap combined in-flight video sizes to approximately 512 MiB per tab; sources with unknown sizes use at most two parallel workers. A direct-transfer stall aborts after 20 seconds without a received chunk, rather than claiming 85–90% while idle. Workers start staggered (40ms apart). Shared cursor distributes tasks within each tab. Multiple tabs may download concurrently and each has an independent worker cap, not a global limit. m3u8 segments use a separate 6-worker pool.
 
 ### m3u8
 
