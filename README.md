@@ -16,7 +16,7 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 - **Extension icon badge**: shows the number of detected videos on the current tab in real time, over a blue rounded-square icon with one centered white downward arrow (16/32/48/128px PNG)
 - **Cross-tab video monitor**: the Batch Download item in the shared left sidebar opens a standalone Monitor page aggregating videos from all open tabs
 - **Settings page**: sidebar-style admin UI for source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, per-site batch concurrency and remembered panel position; repository and bug-report links live in the sidebar
-- **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status
+- **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status. The content height adapts to the number of rows; only lists exceeding the 480px body cap (or the remaining viewport) scroll
 - **Batch downloads**: multi-select, per-site checkboxes, filtered search, independent tab identities, per-item progress and concurrent dispatch to originating tabs
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
@@ -62,9 +62,9 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 | Area | What it does |
 |---|---|
 | Result row | Shows a small preview thumbnail, video title, file size, and selection when multiple videos are detected |
-| Preview | Click the thumbnail to open a compact video preview |
+| Preview | Click the thumbnail to open a standalone viewport-sized video dialog *outside* the 320px panel iframe; close with Escape, backdrop or close button |
 | Bottom bar | Download the selected video(s) or stop the active batch |
-| Panel header | Shows the extension version; Settings opens the standalone options page; collapsed mode becomes a circular download button |
+| Panel header | Drag the title bar to reposition. Collapsing creates a draggable white circular launcher with a purple arrow and shadow; click it to expand. Settings opens the standalone options page |
 
 ## Supported platforms
 
@@ -133,7 +133,8 @@ Page
  │   normalized media objects ────────────▶ │──▶ Blob ──▶ download
  │                                          │
  └──────────────────────────────────────────┘
-              Shadow DOM + iframe → panel.html/js (UI only)
+              Shadow DOM host → panel.html/js (iframe, UI only)
+                             → viewport preview dialog (sibling of panel)
 ```
 
 **Why two worlds**: page JS variables are only readable from the main world, so extraction runs there; downloading requires bypassing CORS, which only the isolated world can do. Extractors never download.
