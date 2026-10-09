@@ -124,7 +124,10 @@ test("collapsed circle can drag with touch/mouse while taps remain distinct", ()
   assert.ok(panelState.suppressToggleClickUntil > Date.now());
   assert.equal(panel.classList["is-dragging"], false);
   assert.match(content, /Date\.now\(\) < panelState\.suppressToggleClickUntil/);
-  assert.match(content, /\.vd-panel\.collapsed #vd-collapse \{[\s\S]*?color: #4f46e5;/);
+  assert.match(content, /\.vd-panel\.collapsed \{[^}]*background: #4f46e5;/);
+  assert.match(content, /\.vd-panel\.collapsed \.vd-panel__bar \{[^}]*background: transparent;/);
+  assert.match(content, /\.vd-panel\.collapsed #vd-collapse \{[^}]*background: #4f46e5;[^}]*color: #fff;/);
+  assert.match(content, /\.vd-panel\.collapsed #vd-collapse:hover \{[^}]*background: #4338ca;[^}]*color: #fff;/);
   assert.match(content, /box-shadow: 0 6px 22px rgba\(15, 23, 42, \.22\)/);
 });
 
