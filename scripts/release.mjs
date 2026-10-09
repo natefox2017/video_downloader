@@ -18,9 +18,9 @@ const RELEASE_TEXT_FILES = new Set(["manifest.json", "LICENSE", "THIRD_PARTY_NOT
  * @returns {string} Version to write into the released manifest.
  */
 export function parseReleaseTag(tag) {
-  const match = /^(?:tag|v)?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?)$/.exec(String(tag || ""));
+  const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?)$/.exec(String(tag || ""));
   if (!match) {
-    throw new Error("Invalid release tag: " + tag + ". Use tag1.2.3, v1.2.3, or 1.2.3 (optional fourth numeric segment).");
+    throw new Error("Invalid release tag: " + tag + ". Use v1.2.3 (optional fourth numeric segment).");
   }
   for (const part of match[1].split(".")) {
     if (Number(part) > 65535) throw new Error("Chrome manifest version component out of range: " + part);

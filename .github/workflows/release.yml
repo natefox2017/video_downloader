@@ -1,13 +1,11 @@
-name: Package Chrome extension (CRX3 + ZIP)
+name: Release Chrome Web Store ZIP and optional CRX3
 
-# Version-tag releases only. Never sign on normal pushes or pull requests.
-# Supported examples: tag0.0.1, v0.0.1, 0.0.1.
+# Production releases are triggered ONLY by v-prefixed version tags.
+# Example: git tag v2.4.0 && git push origin v2.4.0
 on:
   push:
     tags:
-      - 'tag[0-9]*'
       - 'v[0-9]*'
-      - '[0-9]*'
 
 permissions:
   contents: write
@@ -19,8 +17,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-
+    timeout-minutes: 25
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v4
@@ -33,123 +30,97 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Verify tag points to a commit on main
+      - name: Require tag's commit to be on main
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-            echo "::error::Release tags must point to commits already merged into main."
+            echo "::error::Release tags must point to a commit already merged into main."
             exit 1
           fi
 
-      - name: Validate extension and run tests
+      - name: Verify source and run regression tests
         shell: bash
         run: |
           set -euo pipefail
           node --check scripts/release.mjs
-          for file in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
-            node --check "$file"
+          bash -n scripts/build-store.sh
+          for script in background.js rules.js content.js panel.js options.js monitor.js extractors/*.js; do
+            node --check "$script"
           done
           node --test tests/*.test.js
 
-      - name: Stage complete extension
+      - name: Build Chrome Web Store ZIP (minified)
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/release.mjs stage "$GITHUB_REF_NAME" "$PWD" "$PWD/.release/stage/extension"
-          version="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(".release/stage/extension/manifest.json","utf8")).version)')"
+          bash scripts/build-store.sh "$GITHUB_REF_NAME" "$PWD/.release"
+          version="$(node -p 'JSON.parse(require("node:fs").readFileSync(".release/stage/extension/manifest.json","utf8")).version')"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Tag $GITHUB_REF_NAME produces extension version $version"
+          echo "Chrome Web Store build ready: video-downloader-v${version}-chrome-web-store.zip"
 
-      - name: Sign CRX3 and create unpacked-install ZIP
+      - name: Optionally sign CRX3 (same minified files)
         shell: bash
         env:
           CRX_PRIVATE_KEY: ${{ secrets.CRX_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [[ -z "$CRX_PRIVATE_KEY" ]]; then
-            echo "::error title=Missing signing key::Configure the CRX_PRIVATE_KEY repository Actions secret with the original PEM private key. Refusing to generate a new extension ID."
-            exit 1
+            echo "::notice::CRX_PRIVATE_KEY is not configured; Web Store ZIP is ready. Skipping optional self-hosted CRX3."
+            exit 0
           fi
 
           umask 077
-          mkdir -p .release/assets
           key_file="$(mktemp "$RUNNER_TEMP/crx-signing.XXXXXX.pem")"
           trap 'rm -f "$key_file"' EXIT
           printf '%s' "$CRX_PRIVATE_KEY" > "$key_file"
           if ! openssl pkey -in "$key_file" -check -noout > /dev/null 2>&1; then
-            echo "::error::CRX_PRIVATE_KEY is not a valid, unencrypted PEM private key."
+            echo "::error::CRX_PRIVATE_KEY must be a valid, unencrypted PEM private key."
             exit 1
           fi
 
-          # Pin the packer to a CRX3-capable version; no package.json/build chain needed.
           npx --yes crx3@2.0.0 \
             -p "$key_file" \
-            -o "$PWD/.release/assets/video-downloader-${VERSION}.crx" \
-            -z "$PWD/.release/assets/video-downloader-${VERSION}.zip" \
+            -o "$PWD/.release/assets/video-downloader-v${VERSION}.crx" \
+            -z "$RUNNER_TEMP/optional-crx-archive.zip" \
             "$PWD/.release/stage/extension"
+          node scripts/release.mjs verify-crx ".release/assets/video-downloader-v${VERSION}.crx"
+          rm -f "$RUNNER_TEMP/optional-crx-archive.zip"
 
-      - name: Validate release artifacts and checksums
+      - name: Compute and verify release checksums
         shell: bash
         run: |
           set -euo pipefail
-          crx=".release/assets/video-downloader-${VERSION}.crx"
-          zip=".release/assets/video-downloader-${VERSION}.zip"
-
-          test -s "$crx"
+          zip=".release/assets/video-downloader-v${VERSION}-chrome-web-store.zip"
           test -s "$zip"
-          node scripts/release.mjs verify-crx "$crx"
           unzip -tq "$zip"
-
-          # ZIP must contain manifest at the archive root and all standalone UI pages.
-          for file in manifest.json options.html options.js monitor.html monitor.js vendor/pico.min.css images/logo.svg LICENSE THIRD_PARTY_NOTICES.md; do
-            unzip -Z1 "$zip" | grep -Fqx "$file" || {
-              echo "::error::Missing packaged file: $file"
-              exit 1
-            }
-          done
-
-          # Never accidentally publish private keys, tests or build scripts.
-          if unzip -Z1 "$zip" | grep -E '(^|/)([^/]*\.pem|key\.pem|tests/|scripts/|\.github/)'; then
-            echo "::error::An internal or secret file was included in the extension ZIP."
-            exit 1
-          fi
-
-          unzip -p "$zip" manifest.json | node -e '
-            let raw = "";
-            process.stdin.setEncoding("utf8");
-            process.stdin.on("data", (chunk) => raw += chunk);
-            process.stdin.on("end", () => {
-              const manifest = JSON.parse(raw);
-              if (manifest.version !== process.env.VERSION) {
-                throw new Error("Packaged manifest version does not match pushed tag.");
-              }
-              console.log("Packaged manifest version:", manifest.version);
-            });
-          '
-
-          (cd .release/assets && sha256sum "video-downloader-${VERSION}.crx" "video-downloader-${VERSION}.zip" > SHA256SUMS.txt)
+          (
+            cd .release/assets
+            sha256sum "video-downloader-v${VERSION}-chrome-web-store.zip" > SHA256SUMS.txt
+            if [[ -f "video-downloader-v${VERSION}.crx" ]]; then
+              sha256sum "video-downloader-v${VERSION}.crx" >> SHA256SUMS.txt
+            fi
+            sha256sum -c SHA256SUMS.txt
+          )
           ls -lh .release/assets/
 
-      - name: Publish GitHub Release
+      - name: Publish packages on GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           name: Video Downloader v${{ steps.version.outputs.version }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            .release/assets/video-downloader-*.crx
-            .release/assets/video-downloader-*.zip
-            .release/assets/SHA256SUMS.txt
+            .release/assets/*
           body: |
-            Automatically packaged from tag ${{ github.ref_name }}.
+            Automatically built from Git tag ${{ github.ref_name }}.
 
-            - CRX3: signed extension package (use the same private key for future updates).
-            - ZIP: extract it and use Chrome > Extensions > Developer mode > Load unpacked.
-            - SHA256SUMS.txt: file checksums.
+            - **Chrome Web Store upload**: download \`video-downloader-v${{ steps.version.outputs.version }}-chrome-web-store.zip\` and upload it in the Chrome Web Store Developer Dashboard.
+            - **JavaScript** is minified using pinned esbuild, but is **not encrypted or obfuscated** (Chrome Web Store policy).
+            - **CRX3** is available only when the repository has an existing \`CRX_PRIVATE_KEY\` Actions secret; this package is optional and is not submitted to the Chrome Web Store.
+            - **SHA256SUMS.txt** includes checksums of the generated packages.
 
-            Note: Official Chrome may restrict direct installation of non-Web-Store CRX files.
-            For local development, use the ZIP. Chrome Web Store distribution uses its own publishing flow.
+            Uploading this ZIP prepares a Chrome Web Store submission; Google's listing, privacy and manual review steps are still required.

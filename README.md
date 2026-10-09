@@ -43,15 +43,26 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 >
 > On first load Chrome will warn that the extension can "read and change all your data on all websites" — that's the `host_permissions` the generic sniffer needs. The extension never uploads anything.
 
-### From release (recommended)
+### From a published release (recommended)
 
-Download the versioned `.zip` from [Releases](../../releases), unzip it, and load the extracted folder with Chrome's **Load unpacked**. A signed `.crx` is also attached for managed environments that permit self-hosted CRX installation.
+Download `video-downloader-v<version>-chrome-web-store.zip` from [GitHub Releases](../../releases). This is the production-minified Chrome extension ZIP: either submit it directly to the Chrome Web Store Developer Dashboard, or extract it and use Chrome's **Load unpacked** to test.
 
-### Automatic CRX3 and ZIP packaging
+### Automatic Chrome Web Store packaging
 
-Pushing a version tag such as `tag2.3.1`, `v2.3.1` or `2.3.1` triggers GitHub Actions to package the **entire extension** (including settings and cross-tab monitoring pages), sign a CRX3, create a ZIP and publish both with SHA-256 checksums to a GitHub Release. The **tag determines the version in the released manifest**, without modifying source files.
+Only a `v`-prefixed version tag (e.g. `v2.4.0`) triggers the release workflow:
 
-**One-time setup:** add the original extension private key as the GitHub Actions repository secret `CRX_PRIVATE_KEY`. Releases fail clearly if the secret is absent rather than generating a different extension ID. For key generation, exact tag commands, installation restrictions and troubleshooting, see [Automatic CRX3 releases](docs/RELEASE_CRX.md).
+```bash
+git checkout main
+git pull --ff-only origin main
+git tag -a v2.4.0 -m "Release v2.4.0"
+git push origin v2.4.0
+```
+
+The workflow stamps the released `manifest.json` with version `2.4.0`, minifies individual JavaScript files using pinned **esbuild** (without bundling or obfuscation), then publishes a Chrome Web Store ZIP and `SHA256SUMS.txt`. All extension pages, Pico CSS, assets and license notices are included. Source files in Git are unchanged.
+
+Chrome Web Store **allows standard minification but prohibits code encryption/obfuscation intended to conceal functionality**. You must upload the **ZIP**, not the CRX. An **optional** signed CRX3 is also generated if the `CRX_PRIVATE_KEY` repository secret is configured; missing the key never blocks the store ZIP.
+
+See [Chrome Web Store release and submission guide](docs/RELEASE_CRX.md) for review requirements, screenshots/privacy steps and private-key setup. Passing the automated package tests does not guarantee Google review approval.
 
 ## Usage
 
@@ -115,9 +126,10 @@ Pushing a version tag such as `tag2.3.1`, `v2.3.1` or `2.3.1` triggers GitHub Ac
 │   ├── ARCHITECTURE.md     #   How it works (two worlds, message protocol)
 │   └── ADD_PLATFORM.md     #   How to add a new platform
 ├── scripts/release.mjs     # Tag parsing, clean extension staging and CRX3 header checks
+├── scripts/build-store.sh  # Release-only esbuild minification and Chrome Web Store ZIP
 ├── .github/workflows/
 │   ├── ci.yml              # JS syntax, tests, and disposable package smoke test
-│   ├── release.yml         # Signed CRX3 + ZIP + checksums on numeric version tags
+│   ├── release.yml         # v* tag: minified Chrome Web Store ZIP + optional CRX3
 │   └── automerge.yml       # Auto-merge non-draft PRs
 ├── AGENTS.md               # Notes for AI coding assistants
 ├── CONTRIBUTING.md
