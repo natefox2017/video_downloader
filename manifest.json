@@ -1,6 +1,10 @@
 {
   "action": {
-    "default_title": "视频下载助手"
+    "default_title": "视频下载助手",
+    "default_icon": {
+      "16": "images/128.png",
+      "32": "images/128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
@@ -160,9 +164,9 @@
     "<all_urls>"
   ],
   "icons": {
-    "16": "images/16.png",
-    "32": "images/32.png",
-    "48": "images/48.png",
+    "16": "images/128.png",
+    "32": "images/128.png",
+    "48": "images/128.png",
     "128": "images/128.png"
   },
   "manifest_version": 3,
