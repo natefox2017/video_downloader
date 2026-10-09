@@ -11,6 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
+const root = path.resolve(__dirname, "..");
 const release = import("../scripts/release.mjs");
 
 function fixture() {
