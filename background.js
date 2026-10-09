@@ -1,49 +1,38 @@
 /**
- * background.js —— 扩展 Service Worker
+ * background.js — Extension service worker.
  *
- * 职责很轻，只做两件事：
- *   1. 点击扩展图标时，把「显示面板」指令发给当前标签页（任意网站，不再限定抖音）；
- *   2. 若该标签页还没注入内容脚本（例如扩展刚重载、页面未刷新），自动补注入一次。
- *
- * 说明：
- *   - 媒体抓取在各平台的主世界抓取脚本（extractors/*.js）与内容脚本的
- *     DOM/资源嗅探里完成，不在 background 里做；
- *   - 下载在 content.js（隔离世界，有 host_permissions，fetch 不受跨域限制）。
+ * Owns action clicks, per-tab badge counts, the cross-tab media registry, options-page opening,
+ * and dispatching batch download requests back to the tab that detected each video.
  */
 
-/** 内容脚本文件（顺序不能换：rules.js 必须先于 content.js 执行） */
 const CONTENT_SCRIPT_FILES = ["rules.js", "content.js"];
+const REGISTRY_KEY = "vd_media_registry";
 
-/** 是否为可注入内容脚本的页面（排除 chrome://、扩展页、应用商店等） */
 function isInjectableUrl(url) {
   return /^https?:\/\//.test(url || "");
 }
 
-/** 按优先级找出要接收指令的标签页：当前活动页优先 */
 async function findTargetTab() {
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (activeTab && isInjectableUrl(activeTab.url)) return activeTab.id;
   } catch (error) {
-    /* 读不到 URL 时继续兜底 */
+    /* Continue to the fallback query. */
   }
 
   try {
     const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
     if (tabs.length) return tabs[tabs.length - 1].id;
   } catch (error) {
-    /* 忽略 */
+    /* Ignore. */
   }
-
   return null;
 }
 
-/** 向目标标签页发送「显示面板」指令，必要时补注入内容脚本 */
 async function showPanelOnTab(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, { type: "show_panel" });
   } catch (error) {
-    // 内容脚本尚未注入（页面在扩展重载前就打开了）→ 动态注入后再试一次
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPT_FILES });
       await chrome.tabs.sendMessage(tabId, { type: "show_panel" });
@@ -51,6 +40,69 @@ async function showPanelOnTab(tabId) {
       console.warn("[视频下载] 无法在该标签页显示面板，请刷新页面后重试。", retryError);
     }
   }
+}
+
+async function readRegistry() {
+  const data = await chrome.storage.session.get(REGISTRY_KEY);
+  const registry = data[REGISTRY_KEY];
+  return registry && typeof registry === "object" ? registry : {};
+}
+
+async function writeRegistry(registry) {
+  await chrome.storage.session.set({ [REGISTRY_KEY]: registry });
+}
+
+async function updateRegistry(tabId, message) {
+  const registry = await readRegistry();
+  registry[String(tabId)] = {
+    tabId,
+    pageUrl: message.pageUrl || "",
+    pageTitle: message.pageTitle || "",
+    platform: message.platform || "",
+    updatedAt: Date.now(),
+    items: Array.isArray(message.items) ? message.items : [],
+  };
+  await writeRegistry(registry);
+}
+
+async function removeRegistryTab(tabId) {
+  const registry = await readRegistry();
+  if (!Object.prototype.hasOwnProperty.call(registry, String(tabId))) return;
+  delete registry[String(tabId)];
+  await writeRegistry(registry);
+}
+
+async function setBadge(tabId, count) {
+  const safeCount = Math.max(0, Number(count) || 0);
+  const text = safeCount > 0 ? String(safeCount > 99 ? "99+" : safeCount) : "";
+  await chrome.action.setBadgeText({ text, tabId }).catch(() => {});
+  if (text) {
+    await chrome.action.setBadgeBackgroundColor({ color: "#2563eb", tabId }).catch(() => {});
+  }
+}
+
+async function dispatchMultiTabDownload(items) {
+  const grouped = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const tabId = Number(item?.tabId);
+    const shareUrl = String(item?.shareUrl || "");
+    if (!Number.isInteger(tabId) || !shareUrl) continue;
+    if (!grouped.has(tabId)) grouped.set(tabId, []);
+    grouped.get(tabId).push(shareUrl);
+  }
+
+  let tabsStarted = 0;
+  let videosRequested = 0;
+  for (const [tabId, shareUrls] of grouped) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "start_external_download", shareUrls });
+      tabsStarted += 1;
+      videosRequested += shareUrls.length;
+    } catch (error) {
+      console.warn("[视频下载] 无法向标签页下发批量下载任务：", tabId, error);
+    }
+  }
+  return { tabsStarted, videosRequested };
 }
 
 chrome.action.onClicked.addListener(async () => {
@@ -62,28 +114,54 @@ chrome.action.onClicked.addListener(async () => {
   await showPanelOnTab(tabId);
 });
 
-/* ---------------- 扩展图标徽标：显示当前标签页检测到的视频数量 ---------------- */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || !message.type) return undefined;
 
-/** content.js 上报视频数量时，在对应标签页的图标上显示徽标 */
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (!message || message.type !== "update_badge" || sender.tab?.id == null) return;
-  const count = message.count || 0;
-  const tabId = sender.tab.id;
-  const text = count > 0 ? String(count > 99 ? "99+" : count) : "";
-  chrome.action.setBadgeText({ text, tabId }).catch(() => {});
-  if (text) {
-    chrome.action.setBadgeBackgroundColor({ color: "#4f46e5", tabId }).catch(() => {});
+  if (message.type === "update_badge" && sender.tab?.id != null) {
+    setBadge(sender.tab.id, message.count);
+    return undefined;
   }
+
+  if (message.type === "update_media_registry" && sender.tab?.id != null) {
+    const tabId = sender.tab.id;
+    Promise.all([
+      setBadge(tabId, Array.isArray(message.items) ? message.items.length : 0),
+      updateRegistry(tabId, message),
+    ]).catch(() => {});
+    return undefined;
+  }
+
+  if (message.type === "get_media_registry") {
+    readRegistry().then((registry) => sendResponse({ ok: true, registry })).catch((error) => {
+      sendResponse({ ok: false, error: error.message || String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === "start_multi_tab_download") {
+    dispatchMultiTabDownload(message.items).then((result) => sendResponse({ ok: true, ...result })).catch((error) => {
+      sendResponse({ ok: false, error: error.message || String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === "open_options") {
+    chrome.runtime.openOptionsPage().then(() => sendResponse({ ok: true })).catch((error) => {
+      sendResponse({ ok: false, error: error.message || String(error) });
+    });
+    return true;
+  }
+
+  return undefined;
 });
 
-/** 标签页关闭时清除徽标，避免残留 */
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
+  removeRegistryTab(tabId).catch(() => {});
 });
 
-/** 标签页开始导航（刷新/跳转）时清零，等 content.js 重新上报 */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading") {
-    chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
-  }
+  if (changeInfo.status !== "loading") return;
+  chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
+  removeRegistryTab(tabId).catch(() => {});
 });

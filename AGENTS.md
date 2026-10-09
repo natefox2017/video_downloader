@@ -64,10 +64,10 @@ Functional verification (no automated test framework — verify by hand):
 4. **Closing the panel = `display:none`, never destroyed.**
    Hiding the panel must not interrupt an ongoing download.
 5. **Keep permissions minimal.**
-   `permissions` currently holds only `scripting`. Downloads are implemented as
-   "`fetch` → `Blob` → `<a download>`" — **do not request the `downloads` permission
-   just for downloading**, and do not request `storage` (the downloaded-record uses
-   the page's `localStorage`).
+   Downloads are implemented as "`fetch` → `Blob` → `<a download>`" — **do not request
+   the `downloads` permission just for downloading**. The `storage` permission is used only
+   for extension settings, remembered panel position, and the temporary cross-tab media registry;
+   downloaded-record persistence remains in the page's `localStorage`.
    `host_permissions: <all_urls>` is required for generic sniffing
    (direct-link downloads must bypass CORS) — do not narrow it.
 6. **Message protocol changes must be synced both ways.**

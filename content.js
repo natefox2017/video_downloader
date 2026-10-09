@@ -34,6 +34,95 @@
   /** @type {Array<Object>} 去重后的媒体列表（最新的排在最前） */
   const mediaList = [];
 
+  const SETTINGS_KEY = "vd_settings";
+  const PANEL_POSITION_KEY = "vd_panel_position";
+  let extensionSettings = {
+    ...DEFAULT_SETTINGS,
+    platformStrategies: { ...DEFAULT_SETTINGS.platformStrategies },
+  };
+
+  function applyStoredSettings(value) {
+    extensionSettings = {
+      ...DEFAULT_SETTINGS,
+      ...(value || {}),
+      platformStrategies: {
+        ...DEFAULT_SETTINGS.platformStrategies,
+        ...((value && value.platformStrategies) || {}),
+      },
+    };
+  }
+
+  chrome.storage.local.get(SETTINGS_KEY).then((data) => applyStoredSettings(data[SETTINGS_KEY])).catch(() => {});
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes[SETTINGS_KEY]) applyStoredSettings(changes[SETTINGS_KEY].newValue);
+  });
+
+  function resolvedStrategy() {
+    const override = extensionSettings.platformStrategies?.[currentPlatform.id];
+    return override || currentPlatform.defaultStrategy || "sniff";
+  }
+
+  function sourceIsExtractor(source) {
+    return source === "页面解析";
+  }
+
+  function preferredSource(source) {
+    const strategy = resolvedStrategy();
+    return strategy === "extractor" ? sourceIsExtractor(source) : !sourceIsExtractor(source);
+  }
+
+  function variantHeight(variant) {
+    if (Number(variant?.height) > 0) return Number(variant.height);
+    const match = String(variant?.label || "").match(/(\d{3,4})p?/i);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function variantIsMp4(variant) {
+    return /mp4/i.test(String(variant?.mimeType || variant?.format || variant?.url || ""));
+  }
+
+  function sortedVariants(media) {
+    const variants = Array.isArray(media?.variants) ? media.variants.filter((variant) => variant?.url) : [];
+    const target = Number(extensionSettings.quality);
+    return variants.slice().sort((a, b) => {
+      if (extensionSettings.format === "mp4") {
+        const formatDelta = Number(variantIsMp4(b)) - Number(variantIsMp4(a));
+        if (formatDelta) return formatDelta;
+      }
+      const ah = variantHeight(a);
+      const bh = variantHeight(b);
+      if (extensionSettings.quality === "smallest") {
+        const as = Number(a.size) || Number.MAX_SAFE_INTEGER;
+        const bs = Number(b.size) || Number.MAX_SAFE_INTEGER;
+        if (as !== bs) return as - bs;
+        return ah - bh;
+      }
+      if (target > 0) {
+        const ad = ah ? Math.abs(ah - target) : Number.MAX_SAFE_INTEGER;
+        const bd = bh ? Math.abs(bh - target) : Number.MAX_SAFE_INTEGER;
+        if (ad !== bd) return ad - bd;
+      }
+      if (ah !== bh) return bh - ah;
+      return (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0);
+    });
+  }
+
+  function preferredVariant(media) {
+    return sortedVariants(media)[0] || null;
+  }
+
+  function downloadCandidateUrls(media) {
+    const urls = [];
+    const push = (url) => {
+      const text = String(url || "");
+      if (text && !urls.includes(text)) urls.push(text);
+    };
+    sortedVariants(media).forEach((variant) => push(variant.url));
+    (media.videoUrls || []).forEach(push);
+    push(media.videoUrl);
+    return urls;
+  }
+
   /**
    * 已下载成功的 shareUrl 集合，持久化在页面域名的 localStorage。
    * 刷新页面后「已完成」标记依然保留，下次批量下载不再重复选中。
@@ -77,7 +166,8 @@
         (item) =>
           item.shareUrl === url ||
           item.videoUrl === url ||
-          (Array.isArray(item.videoUrls) && item.videoUrls.includes(url))
+          (Array.isArray(item.videoUrls) && item.videoUrls.includes(url)) ||
+          (Array.isArray(item.variants) && item.variants.some((variant) => variant?.url === url))
       ) || null
     );
   }
@@ -95,9 +185,10 @@
       // Dedicated extractors know the real post title/cover; generic sniffing only knows the page.
       // When both describe the same media URL, prefer extractor metadata instead of keeping a
       // generic document.title such as "抖音-记录美好生活".
-      const incomingIsExtractor = incoming.source === "页面解析";
-      const existingIsExtractor = existing.source === "页面解析";
+      const incomingIsExtractor = sourceIsExtractor(incoming.source);
+      const existingIsExtractor = sourceIsExtractor(existing.source);
       const preferIncomingMetadata = incomingIsExtractor && !existingIsExtractor;
+      const preferIncomingUrls = preferredSource(incoming.source) && !preferredSource(existing.source);
 
       for (const key of ["title", "desc", "author", "cover", "fileName"]) {
         if (incoming[key] && (!existing[key] || preferIncomingMetadata)) existing[key] = incoming[key];
@@ -105,9 +196,21 @@
       if (incoming.size && (!existing.size || preferIncomingMetadata)) existing.size = incoming.size;
       if (incoming.duration && (!existing.duration || preferIncomingMetadata)) existing.duration = incoming.duration;
 
-      const urls = new Set([...(existing.videoUrls || []), ...(incoming.videoUrls || [])]);
-      if (incoming.videoUrl) urls.add(incoming.videoUrl);
-      existing.videoUrls = [...urls];
+      const incomingUrls = [...(incoming.videoUrls || [])];
+      if (incoming.videoUrl) incomingUrls.unshift(incoming.videoUrl);
+      const orderedUrls = preferIncomingUrls
+        ? [...incomingUrls, ...(existing.videoUrls || [])]
+        : [...(existing.videoUrls || []), ...incomingUrls];
+      existing.videoUrls = [...new Set(orderedUrls.filter(Boolean))];
+
+      const variantMap = new Map();
+      const orderedVariants = preferIncomingUrls
+        ? [...(incoming.variants || []), ...(existing.variants || [])]
+        : [...(existing.variants || []), ...(incoming.variants || [])];
+      orderedVariants.forEach((variant) => {
+        if (variant?.url && !variantMap.has(variant.url)) variantMap.set(variant.url, variant);
+      });
+      existing.variants = [...variantMap.values()];
       if (!existing.videoUrl && incoming.videoUrl) existing.videoUrl = incoming.videoUrl;
 
       const images = new Set([...(existing.imageUrls || []), ...(incoming.imageUrls || [])]);
@@ -143,6 +246,7 @@
       size: 0,
       type: "视频",
       videoUrls: [],
+      variants: [],
       imageUrls: [],
       audioUrl: "",
       ...incoming,
@@ -330,7 +434,8 @@
           font-size: 12px;
           font-weight: 600;
         }
-        .vd-panel__count {
+        .vd-panel__version {
+          font-size: 10px;
           font-weight: 400;
           color: #9ca3af;
         }
@@ -364,9 +469,38 @@
           min-height: 0;
           background: #ffffff;
         }
+        .vd-panel.collapsed {
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+        }
+        .vd-panel.collapsed .vd-panel__bar {
+          width: 44px;
+          height: 44px;
+          flex-basis: 44px;
+          padding: 0;
+          border: 0;
+          justify-content: center;
+        }
+        .vd-panel.collapsed .vd-panel__title,
+        .vd-panel.collapsed #vd-settings,
+        .vd-panel.collapsed #vd-close,
         .vd-panel.collapsed .vd-panel__body {
           display: none;
         }
+        .vd-panel.collapsed .vd-panel__actions {
+          width: 100%;
+          height: 100%;
+        }
+        .vd-panel.collapsed #vd-collapse {
+          width: 100%;
+          height: 100%;
+          border-radius: 50%;
+          color: #2563eb;
+        }
+        #vd-collapse .vd-collapse__download { display: none; }
+        .vd-panel.collapsed #vd-collapse .vd-collapse__minus { display: none; }
+        .vd-panel.collapsed #vd-collapse .vd-collapse__download { display: block; }
         .vd-panel__frame {
           width: 100%;
           height: 100%;
@@ -387,9 +521,15 @@
       </style>
       <div class="vd-panel" id="vd-panel">
         <div class="vd-panel__bar" id="vd-bar">
-          <span class="vd-panel__title">视频下载</span>
+          <span class="vd-panel__title">视频下载 <span class="vd-panel__version">v${chrome.runtime.getManifest().version}</span></span>
           <span class="vd-panel__actions">
-            <button class="vd-panel__btn" id="vd-collapse" title="折叠 / 展开">−</button>
+            <button class="vd-panel__btn" id="vd-settings" title="设置" aria-label="设置">
+              <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10" cy="10" r="3"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"/></svg>
+            </button>
+            <button class="vd-panel__btn" id="vd-collapse" title="折叠 / 展开" aria-label="折叠 / 展开">
+              <span class="vd-collapse__minus">−</span>
+              <svg class="vd-collapse__download" viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <button class="vd-panel__btn" id="vd-close" title="关闭面板（不影响正在进行的下载）">✕</button>
           </span>
         </div>
@@ -415,14 +555,17 @@
       const panel = shadow.querySelector("#vd-panel");
       panelState.collapsed = !panelState.collapsed;
       panel.classList.toggle("collapsed", panelState.collapsed);
-      shadow.querySelector("#vd-collapse").textContent = panelState.collapsed ? "+" : "−";
     });
 
+    shadow.querySelector("#vd-settings").addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "open_options" }).catch(() => {});
+    });
     shadow.querySelector("#vd-close").addEventListener("click", () => hidePanel());
 
     enableDrag(shadow);
 
     (document.body || document.documentElement).appendChild(host);
+    restorePanelPosition(shadow).catch(() => {});
   }
 
   function enableDrag(shadow) {
@@ -459,7 +602,30 @@
     });
 
     window.addEventListener("mouseup", () => {
+      if (!dragging) return;
       dragging = false;
+      savePanelPosition(panel).catch(() => {});
+    });
+  }
+
+  async function restorePanelPosition(shadow) {
+    if (extensionSettings.rememberPanelPosition === false) return;
+    const data = await chrome.storage.local.get(PANEL_POSITION_KEY);
+    const position = data[PANEL_POSITION_KEY];
+    if (!position || typeof position.left !== "number" || typeof position.top !== "number") return;
+    const panel = shadow.querySelector("#vd-panel");
+    const maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - 44);
+    panel.style.right = "auto";
+    panel.style.left = Math.max(0, Math.min(position.left, maxLeft)) + "px";
+    panel.style.top = Math.max(0, Math.min(position.top, maxTop)) + "px";
+  }
+
+  async function savePanelPosition(panel) {
+    if (extensionSettings.rememberPanelPosition === false) return;
+    const rect = panel.getBoundingClientRect();
+    await chrome.storage.local.set({
+      [PANEL_POSITION_KEY]: { left: Math.round(rect.left), top: Math.round(rect.top) },
     });
   }
 
@@ -482,19 +648,23 @@
   /* ================================================================== */
 
   function buildPanelItems() {
-    return mediaList.map((item) => ({
-      shareUrl: item.shareUrl,
-      title: item.title,
-      author: item.author,
-      cover: item.cover,
-      previewUrl: item.videoUrl || (Array.isArray(item.videoUrls) ? item.videoUrls[0] : "") || "",
-      size: item.size,
-      type: item.type,
-      platform: item.platform || currentPlatform.name,
-      source: item.source || "网络嗅探",
-      status: item.status || "idle",
-      progress: item.progress || 0,
-    }));
+    return mediaList.map((item) => {
+      const variant = preferredVariant(item);
+      return {
+        shareUrl: item.shareUrl,
+        title: item.title,
+        author: item.author,
+        cover: item.cover,
+        previewUrl: variant?.url || item.videoUrl || (Array.isArray(item.videoUrls) ? item.videoUrls[0] : "") || "",
+        size: variant?.size || item.size,
+        quality: variant?.label || "",
+        type: item.type,
+        platform: item.platform || currentPlatform.name,
+        source: item.source || "网络嗅探",
+        status: item.status || "idle",
+        progress: item.progress || 0,
+      };
+    });
   }
 
   function sendToPanel(message) {
@@ -504,13 +674,15 @@
   }
 
   function pushMediaList() {
-    sendToPanel({ type: "media_list", items: buildPanelItems() });
-    // 同步更新扩展图标徽标（显示检测到的视频数量）
-    try {
-      chrome.runtime.sendMessage({ type: "update_badge", count: mediaList.length });
-    } catch (error) {
-      /* 后台未就绪时忽略 */
-    }
+    const items = buildPanelItems();
+    sendToPanel({ type: "media_list", items });
+    chrome.runtime.sendMessage({
+      type: "update_media_registry",
+      pageUrl: location.href,
+      pageTitle: document.title || location.hostname,
+      platform: currentPlatform.name,
+      items,
+    }).catch(() => {});
   }
 
   window.addEventListener("message", (event) => {
@@ -537,6 +709,9 @@
         break;
       case "stop_download":
         stopBatchDownload();
+        break;
+      case "open_settings":
+        chrome.runtime.sendMessage({ type: "open_options" }).catch(() => {});
         break;
       default:
         break;
@@ -712,7 +887,7 @@
 
   /** 依次尝试视频的所有候选地址，返回第一个下载成功的 Blob */
   async function fetchVideoWithFallback(media, onProgress) {
-    const candidates = (media.videoUrls && media.videoUrls.length ? media.videoUrls : [media.videoUrl]).filter(Boolean);
+    const candidates = downloadCandidateUrls(media);
     let lastError = null;
 
     for (const url of candidates) {
@@ -1054,6 +1229,11 @@
     }
     if (message.type === "hide_panel") {
       hidePanel();
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (message.type === "start_external_download") {
+      startBatchDownload(Array.isArray(message.shareUrls) ? message.shareUrls : []);
       sendResponse({ ok: true });
       return true;
     }

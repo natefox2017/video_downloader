@@ -160,15 +160,16 @@
     "<all_urls>"
   ],
   "icons": {
-    "128": "images/128.png",
     "16": "images/16.png",
     "32": "images/32.png",
-    "48": "images/48.png"
+    "48": "images/48.png",
+    "128": "images/128.png"
   },
   "manifest_version": 3,
   "name": "视频下载助手",
   "permissions": [
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "version": "2.3.0",
   "web_accessible_resources": [
@@ -180,8 +181,13 @@
         "panel.html",
         "panel.js",
         "panel.css",
-        "images/*"
+        "images/*",
+        "images/logo.svg"
       ]
     }
-  ]
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
 }
