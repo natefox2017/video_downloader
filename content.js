@@ -54,7 +54,12 @@
 
   chrome.storage.local.get(SETTINGS_KEY).then((data) => applyStoredSettings(data[SETTINGS_KEY])).catch(() => {});
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === "local" && changes[SETTINGS_KEY]) applyStoredSettings(changes[SETTINGS_KEY].newValue);
+    if (areaName !== "local" || !changes[SETTINGS_KEY]) return;
+    applyStoredSettings(changes[SETTINGS_KEY].newValue);
+    if (mediaList.length) {
+      requestCurrentMedia();
+      pushMediaList();
+    }
   });
 
   function resolvedStrategy() {
@@ -1098,6 +1103,7 @@
       status: media.status,
       progress: media.progress || 0,
     });
+    if (status === "done" || status === "error") pushMediaList();
   }
 
   /**
