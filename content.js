@@ -387,7 +387,7 @@
 
   let host = null;
   let panelFrame = null;
-  const panelState = { collapsed: false };
+  const panelState = { collapsed: false, contentHeight: 144, suppressToggleClickUntil: 0 };
 
   function buildPanel() {
     if (host) return;
@@ -401,12 +401,13 @@
       <style>
         .vd-panel {
           --vd-width: 320px;
-          --vd-max-height: 55vh;
+          --vd-max-height: 480px;
           position: fixed;
           top: 16px;
           right: 16px;
           width: var(--vd-width);
           max-width: calc(100vw - 24px);
+          max-height: calc(100dvh - 24px);
           box-sizing: border-box;
           contain: layout paint;
           display: flex;
@@ -428,7 +429,8 @@
           padding: 0 6px 0 12px;
           background: #ffffff;
           border-bottom: 1px solid #e5e7eb;
-          cursor: move;
+          cursor: grab;
+          touch-action: none;
           user-select: none;
         }
         .vd-panel__title {
@@ -469,23 +471,29 @@
         }
         .vd-panel__body {
           position: relative;
-          height: 140px;
-          max-height: var(--vd-max-height);
+          flex: 0 1 auto;
+          height: 96px;
+          max-height: min(var(--vd-max-height), calc(100dvh - 68px));
           min-height: 0;
+          overflow: hidden;
           background: #ffffff;
         }
         .vd-panel.collapsed {
-          width: 44px;
-          height: 44px;
+          width: 52px;
+          height: 52px;
           border-radius: 50%;
+          border-color: rgba(79, 70, 229, .18);
+          background: #fff;
+          box-shadow: 0 6px 22px rgba(15, 23, 42, .22), 0 2px 8px rgba(79, 70, 229, .14);
         }
         .vd-panel.collapsed .vd-panel__bar {
-          width: 44px;
-          height: 44px;
-          flex-basis: 44px;
+          width: 100%;
+          height: 100%;
+          flex: 1 0 auto;
           padding: 0;
           border: 0;
           justify-content: center;
+          cursor: grab;
         }
         .vd-panel.collapsed .vd-panel__title,
         .vd-panel.collapsed #vd-settings,
@@ -501,8 +509,17 @@
           width: 100%;
           height: 100%;
           border-radius: 50%;
-          color: #2563eb;
+          background: #fff;
+          color: #4f46e5;
+          cursor: grab;
         }
+        .vd-panel.collapsed #vd-collapse:hover {
+          background: #f5f3ff;
+          color: #4338ca;
+        }
+        .vd-panel.is-dragging .vd-panel__bar,
+        .vd-panel.is-dragging #vd-collapse { cursor: grabbing; }
+        #vd-collapse:focus-visible { outline: 3px solid rgba(79, 70, 229, .35); outline-offset: -3px; }
         #vd-collapse .vd-collapse__download { display: none; }
         .vd-panel.collapsed #vd-collapse .vd-collapse__minus { display: none; }
         .vd-panel.collapsed #vd-collapse .vd-collapse__download { display: block; }
@@ -556,10 +573,20 @@
     });
     body.appendChild(panelFrame);
 
-    shadow.querySelector("#vd-collapse").addEventListener("click", () => {
+    shadow.querySelector("#vd-collapse").addEventListener("click", (event) => {
+      // A drag ends in a synthesized click on some pointer devices.
+      if (event.detail !== 0 && Date.now() < panelState.suppressToggleClickUntil) {
+        event.preventDefault();
+        return;
+      }
       const panel = shadow.querySelector("#vd-panel");
+      const before = panel.getBoundingClientRect();
       panelState.collapsed = !panelState.collapsed;
       panel.classList.toggle("collapsed", panelState.collapsed);
+      // Keep the right edge stationary, so expanding near the viewport edge
+      // opens toward the available space instead of going off-screen.
+      clampPanelPosition(panel, before.right - panel.offsetWidth, before.top);
+      if (!panelState.collapsed) updatePanelHeight(shadow);
     });
 
     shadow.querySelector("#vd-settings").addEventListener("click", () => {
@@ -568,49 +595,102 @@
     shadow.querySelector("#vd-close").addEventListener("click", () => hidePanel());
 
     enableDrag(shadow);
+    window.addEventListener("resize", () => {
+      if (host?.style.display !== "none") updatePanelHeight(shadow);
+    });
 
     (document.body || document.documentElement).appendChild(host);
     restorePanelPosition(shadow).catch(() => {});
   }
 
+  /**
+   * Keep the floating panel fully on screen after dragging, resizing or expanding.
+   * @param {HTMLElement} panel Floating shadow DOM panel.
+   * @param {number} [x] Preferred left viewport coordinate.
+   * @param {number} [y] Preferred top viewport coordinate.
+   * @returns {void}
+   */
+  function clampPanelPosition(panel, x, y) {
+    const rect = panel.getBoundingClientRect();
+    const margin = 12;
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - height - margin);
+    const left = Number.isFinite(x) ? x : rect.left;
+    const top = Number.isFinite(y) ? y : rect.top;
+    panel.style.right = "auto";
+    panel.style.left = Math.max(margin, Math.min(left, maxLeft)) + "px";
+    panel.style.top = Math.max(margin, Math.min(top, maxTop)) + "px";
+  }
+
+  /**
+   * Size the iframe to its measured content before enabling scrolling.
+   * A compact two-row list should not inherit a fixed 55vh cap.
+   * @param {ShadowRoot} shadow Floating panel shadow root.
+   * @returns {void}
+   */
+  function updatePanelHeight(shadow) {
+    const body = shadow.querySelector(".vd-panel__body");
+    const panel = shadow.querySelector("#vd-panel");
+    if (!body || !panel) return;
+    const maxBody = Math.max(72, Math.min(480, window.innerHeight - 68));
+    body.style.height = Math.min(Math.max(72, Math.ceil(panelState.contentHeight)), maxBody) + "px";
+    if (panel.isConnected && host?.style.display !== "none") clampPanelPosition(panel);
+  }
+
+  /**
+   * Support touch, pen and mouse dragging on the title bar and collapsed button.
+   * A movement threshold distinguishes a drag from a click to re-expand the bubble.
+   * @param {ShadowRoot} shadow Floating panel shadow root.
+   * @returns {void}
+   */
   function enableDrag(shadow) {
     const bar = shadow.querySelector("#vd-bar");
     const panel = shadow.querySelector("#vd-panel");
-    let startX = 0;
-    let startY = 0;
-    let originLeft = 0;
-    let originTop = 0;
-    let dragging = false;
+    let gesture = null;
 
-    bar.addEventListener("mousedown", (event) => {
-      if (event.target.closest("button")) return;
-      dragging = true;
+    bar.addEventListener("pointerdown", (event) => {
+      if (!event.isPrimary || event.button !== 0) return;
+      const button = event.target.closest("button");
+      if (button && !panelState.collapsed) return;
       const rect = panel.getBoundingClientRect();
-      startX = event.clientX;
-      startY = event.clientY;
-      originLeft = rect.left;
-      originTop = rect.top;
-      panel.style.right = "auto";
-      panel.style.left = rect.left + "px";
-      panel.style.top = rect.top + "px";
+      gesture = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        moved: false,
+      };
+      // Capture on the actual button when collapsed so tap activation still
+      // targets the button; dragged pointers continue working off the bubble.
+      (button || bar).setPointerCapture(event.pointerId);
+    });
+
+    bar.addEventListener("pointermove", (event) => {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      const dx = event.clientX - gesture.startX;
+      const dy = event.clientY - gesture.startY;
+      if (!gesture.moved && Math.hypot(dx, dy) < 5) return;
+      gesture.moved = true;
+      panel.classList.add("is-dragging");
+      clampPanelPosition(panel, gesture.left + dx, gesture.top + dy);
       event.preventDefault();
     });
 
-    window.addEventListener("mousemove", (event) => {
-      if (!dragging) return;
-      const left = originLeft + (event.clientX - startX);
-      const top = originTop + (event.clientY - startY);
-      const maxLeft = window.innerWidth - 60;
-      const maxTop = window.innerHeight - 40;
-      panel.style.left = Math.max(-panel.offsetWidth + 80, Math.min(left, maxLeft)) + "px";
-      panel.style.top = Math.max(0, Math.min(top, maxTop)) + "px";
-    });
+    function finishDrag(event) {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (gesture.moved) {
+        panelState.suppressToggleClickUntil = Date.now() + 160;
+        savePanelPosition(panel).catch(() => {});
+      }
+      panel.classList.remove("is-dragging");
+      gesture = null;
+    }
 
-    window.addEventListener("mouseup", () => {
-      if (!dragging) return;
-      dragging = false;
-      savePanelPosition(panel).catch(() => {});
-    });
+    bar.addEventListener("pointerup", finishDrag);
+    bar.addEventListener("pointercancel", finishDrag);
   }
 
   async function restorePanelPosition(shadow) {
@@ -619,11 +699,7 @@
     const position = data[PANEL_POSITION_KEY];
     if (!position || typeof position.left !== "number" || typeof position.top !== "number") return;
     const panel = shadow.querySelector("#vd-panel");
-    const maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth);
-    const maxTop = Math.max(0, window.innerHeight - 44);
-    panel.style.right = "auto";
-    panel.style.left = Math.max(0, Math.min(position.left, maxLeft)) + "px";
-    panel.style.top = Math.max(0, Math.min(position.top, maxTop)) + "px";
+    clampPanelPosition(panel, position.left, position.top);
   }
 
   async function savePanelPosition(panel) {
@@ -638,6 +714,7 @@
     buildPanel();
     if (host && !host.isConnected) (document.body || document.documentElement).appendChild(host);
     if (host) host.style.display = "";
+    updatePanelHeight(host.shadowRoot);
     // 打开面板时做一次全量补抓：主世界抓取 + DOM 扫描
     requestCurrentMedia();
     scanDomVideos();
@@ -731,16 +808,12 @@
       case "panel_ready":
         sendToPanel({ type: "media_list", items: buildPanelItems() });
         break;
-      case "panel_resize": {
-        // iframe 上报内容高度 → 自适应面板高度（不超过最大高度）
-        const body = host?.shadowRoot?.querySelector(".vd-panel__body");
-        if (body && typeof data.height === "number" && data.height > 0) {
-          const maxPx = Math.floor(window.innerHeight * 0.55);
-          const h = Math.max(140, Math.min(Math.ceil(data.height), maxPx));
-          body.style.height = h + "px";
+      case "panel_resize":
+        if (Number.isFinite(data.height) && data.height > 0) {
+          panelState.contentHeight = data.height;
+          if (host?.shadowRoot) updatePanelHeight(host.shadowRoot);
         }
         break;
-      }
       case "start_download":
         startBatchDownload(Array.isArray(data.shareUrls) ? data.shareUrls : []);
         break;
