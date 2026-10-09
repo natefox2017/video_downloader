@@ -177,6 +177,158 @@
     );
   }
 
+
+  /* Verify actual response bytes before admitting an item to either UI. */
+  const mediaProbeCache = new Map();
+  const mediaProbeQueue = [];
+  let activeMediaProbes = 0;
+
+  /**
+   * Read a bounded prefix even when a CDN ignores Range and responds with
+   * HTTP 200 for the entire file. Never call response.blob() for a probe.
+   * @param {Response} response Partial (or full) HTTP response.
+   * @param {number} limit Maximum bytes to retain.
+   * @returns {Promise<Uint8Array>} Leading payload bytes.
+   */
+  async function readProbeBytes(response, limit) {
+    if (!response.body) return new Uint8Array();
+    const reader = response.body.getReader();
+    const chunks = [];
+    let length = 0;
+    try {
+      while (length < limit) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = value.subarray(0, limit - length);
+        chunks.push(chunk);
+        length += chunk.length;
+      }
+    } finally {
+      reader.cancel().catch(() => {}); // Reject the rest of an ignored Range response.
+    }
+    const result = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return result;
+  }
+
+  /**
+   * Fetch at most 16 KiB to confirm actual video bytes/MIME or a video HLS
+   * manifest. A missing/incorrect Content-Type must be backed by a signature.
+   * @param {string} url Candidate HTTP(S) source.
+   * @returns {Promise<object|null>} Validated source metadata or null.
+   */
+  async function probeMediaUrl(url) {
+    const source = safePreviewUrl(url);
+    if (!source || shouldIgnoreUrl(source)) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_RULES.MEDIA_PROBE_TIMEOUT_MS);
+    try {
+      const response = await fetch(source, {
+        credentials: "omit",
+        headers: { Range: "bytes=0-" + (DOWNLOAD_RULES.MEDIA_PROBE_MAX_BYTES - 1) },
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const mime = response.headers.get("content-type") || "";
+      const playlist = isPlaylistUrl(source) || /mpegurl/i.test(mime);
+      if (!playlist && isRejectedMediaMimeType(mime)) return null;
+
+      const bytes = await readProbeBytes(response, DOWNLOAD_RULES.MEDIA_PROBE_MAX_BYTES);
+      if (!bytes.length) return null;
+      if (playlist) {
+        const text = new TextDecoder().decode(bytes);
+        if (!isHlsVideoPlaylist(text)) return null;
+      } else {
+        const signature = sniffVideoSignature(bytes);
+        if (signature === "invalid") return null;
+        if (signature !== "video" && !isVideoMimeType(mime)) return null;
+      }
+
+      const rangeTotal = Number((response.headers.get("content-range") || "").match(/\/(\d+)$/)?.[1] || 0);
+      const contentLength = Number(response.headers.get("content-length")) || 0;
+      return {
+        url: source,
+        size: rangeTotal || (response.status === 200 && !playlist ? contentLength : 0),
+        kind: playlist ? "hls" : "video",
+      };
+    } catch (error) {
+      // A temporary failure remains invisible rather than being listed as a video.
+      return null;
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
+  /** Bound network probes globally per tab, with one in-flight probe per URL. */
+  function queueMediaProbe(url) {
+    const cached = mediaProbeCache.get(url);
+    if (cached && Date.now() - cached.time < 45_000) return cached.promise;
+    const promise = new Promise((resolve) => {
+      mediaProbeQueue.push({ url, resolve });
+      drainMediaProbes();
+    });
+    mediaProbeCache.set(url, { promise, time: Date.now() });
+    return promise;
+  }
+
+  /** Dispatch only a few 16 KiB probes at a time to avoid slowing the page. */
+  function drainMediaProbes() {
+    while (activeMediaProbes < DOWNLOAD_RULES.MEDIA_PROBE_CONCURRENCY && mediaProbeQueue.length) {
+      const job = mediaProbeQueue.shift();
+      activeMediaProbes++;
+      probeMediaUrl(job.url).then(job.resolve, () => job.resolve(null)).finally(() => {
+        activeMediaProbes--;
+        drainMediaProbes();
+      });
+    }
+  }
+
+  /**
+   * A gallery, audio URL, or unverified source must not become a selectable
+   * video. Reject stale asynchronous results when a new extractor URL arrives.
+   * @param {object} media Internal mutable media record.
+   * @returns {void}
+   */
+  function verifyMediaRecord(media) {
+    const candidates = downloadCandidateUrls(media)
+      .filter((url) => safePreviewUrl(url) && !shouldIgnoreUrl(url))
+      .filter((url) => sourceIsExtractor(media.source) || isWorthCollecting(url))
+      .slice(0, 4);
+    const signature = media.type === "图集" ? "" : candidates.join("\n");
+    if (media.verificationSignature === signature && media.verificationState) return;
+    media.verificationSignature = signature;
+    media.verificationState = "pending";
+    media.verifiedUrl = "";
+    const generation = (media.verificationGeneration || 0) + 1;
+    media.verificationGeneration = generation;
+
+    if (!signature) {
+      media.verificationState = "rejected";
+      return;
+    }
+
+    (async () => {
+      let verified = null;
+      for (const url of candidates) {
+        verified = await queueMediaProbe(url);
+        if (media.verificationGeneration !== generation) return;
+        if (verified) break;
+      }
+      if (media.verificationGeneration !== generation) return;
+      media.verificationState = verified ? "verified" : "rejected";
+      if (verified) {
+        media.verifiedUrl = verified.url;
+        if (verified.size > 0) media.verifiedSize = verified.size;
+      }
+      pushMediaList();
+    })().catch((error) => console.warn("[视频下载] 媒体验证失败：", error));
+  }
+
   /**
    * 媒体入库（去重 + 合并）。
    * 抓取脚本上报的元数据最丰富，嗅探到的只有 URL：同一条目多次出现时，
@@ -234,6 +386,7 @@
         }
       }
 
+      verifyMediaRecord(existing);
       pushMediaList();
       return;
     }
@@ -264,6 +417,7 @@
     if (!item.fileName) {
       item.fileName = buildFileName(item.platform || currentPlatform.name, item.author, item.title);
     }
+    verifyMediaRecord(item);
     pushMediaList();
   }
 
@@ -290,7 +444,9 @@
     if (!url) return false;
     if (url.startsWith("blob:") || url.startsWith("data:")) return false; // 临时地址，无法下载
     if (shouldIgnoreUrl(url)) return false; // 广告 / 埋点 / 缩略图
-    return true;
+    // Playback fragments and audio are not independently downloadable videos.
+    if (/\.(?:ts|m4s|m4a|mp3|aac|wav|ogg|vtt|jpg|jpeg|png|webp)(?:[?#]|$)/i.test(url)) return false;
+    return /^https?:\/\//i.test(url);
   }
 
   /** 从 <video> 元素收集候选地址 */
@@ -975,15 +1131,15 @@
   /* ================================================================== */
 
   function buildPanelItems() {
-    return mediaList.map((item) => {
+    return mediaList.filter((item) => item.verificationState === "verified").map((item) => {
       const variant = preferredVariant(item);
       return {
         shareUrl: item.shareUrl,
         title: item.title,
         author: item.author,
         cover: item.cover,
-        previewUrl: variant?.url || item.videoUrl || (Array.isArray(item.videoUrls) ? item.videoUrls[0] : "") || "",
-        size: variant?.size || item.size,
+        previewUrl: item.verifiedUrl || "",
+        size: item.verifiedSize || (variant?.url === item.verifiedUrl ? variant?.size : 0) || item.size,
         quality: variant?.label || "",
         type: item.type,
         platform: item.platform || currentPlatform.name,
@@ -1539,7 +1695,7 @@
 
     const targets = [...new Set(shareUrls)]
       .map((url) => mediaList.find((item) => item.shareUrl === url))
-      .filter((item) => item && item.status !== "done" && item.status !== "downloading");
+      .filter((item) => item && item.verificationState === "verified" && item.status !== "done" && item.status !== "downloading");
 
     if (!targets.length) {
       sendToPanel({ type: "toast", message: "没有需要下载的视频（已完成的不再重复下载）" });
@@ -1624,7 +1780,7 @@
       }
       const shareUrls = Array.isArray(message.shareUrls) ? [...new Set(message.shareUrls)] : [];
       const available = shareUrls.filter((url) =>
-        mediaList.some((item) => item.shareUrl === url && item.status !== "done")
+        mediaList.some((item) => item.shareUrl === url && item.verificationState === "verified" && item.status !== "done")
       );
       if (!available.length) {
         sendResponse({ ok: false, error: "该网页没有待下载的视频" });
