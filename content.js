@@ -678,16 +678,23 @@
     }
   }
 
-  function pushMediaList() {
-    const items = buildPanelItems();
-    sendToPanel({ type: "media_list", items });
+  /**
+   * Publish display-only media metadata to the cross-tab monitor.
+   * Keep this payload separate from the full download candidate list.
+   * @param {Array<Object>} items Normalized panel/media descriptors.
+   * @returns {void}
+   */
+  function publishRegistry(items) {
     const registryItems = items.map((item) => ({
       shareUrl: item.shareUrl,
       title: item.title,
+      cover: item.cover,
+      previewUrl: item.previewUrl,
       size: item.size,
       quality: item.quality,
       platform: item.platform,
       status: item.status,
+      progress: item.progress,
     }));
     chrome.runtime.sendMessage({
       type: "update_media_registry",
@@ -696,6 +703,23 @@
       platform: currentPlatform.name,
       items: registryItems,
     }).catch(() => {});
+  }
+
+  function pushMediaList() {
+    const items = buildPanelItems();
+    sendToPanel({ type: "media_list", items });
+    publishRegistry(items);
+  }
+
+  // Progress can change every few milliseconds. Coalesce registry writes so
+  // the service worker does not serialize one storage update for every chunk.
+  let registryProgressTimer = null;
+  function scheduleRegistryProgress() {
+    if (registryProgressTimer) return;
+    registryProgressTimer = setTimeout(() => {
+      registryProgressTimer = null;
+      publishRegistry(buildPanelItems());
+    }, 900);
   }
 
   window.addEventListener("message", (event) => {
@@ -763,7 +787,7 @@
     return { budgetBytes: 0, source: "默认值" };
   }
 
-  function resolveConcurrency(targets) {
+  function resolveConcurrency(targets, requestedConcurrency) {
     const budget = readBrowserMemoryBudget();
     const sizes = targets.map((item) => Number(item.size) || 0).filter((size) => size > 0);
     const perVideo = sizes.length
@@ -773,8 +797,13 @@
     const usableBytes = budget.budgetBytes * MEMORY_BUDGET_RATIO;
     const raw = usableBytes > 0 ? Math.floor(usableBytes / perVideo) : MIN_CONCURRENCY;
 
+    // The manual limit is per originating tab; memory pressure can reduce it.
+    const setting = requestedConcurrency == null ? extensionSettings.batchConcurrency : requestedConcurrency;
+    const manualLimit = Number(setting) > 0
+      ? Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(Number(setting))))
+      : MAX_CONCURRENCY;
     return {
-      threads: Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw)),
+      threads: Math.min(manualLimit, Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, raw))),
       usableBytes: Math.round(usableBytes),
       perVideo,
       sizeSampled: sizes.length > 0,
@@ -1100,7 +1129,15 @@
       status: media.status,
       progress: media.progress || 0,
     });
-    if (status === "done" || status === "error") pushMediaList();
+    if (status === "done" || status === "error") {
+      if (registryProgressTimer) clearTimeout(registryProgressTimer);
+      registryProgressTimer = null;
+      pushMediaList();
+    } else if (progress === 0) {
+      publishRegistry(buildPanelItems());
+    } else {
+      scheduleRegistryProgress();
+    }
   }
 
   /**
@@ -1176,12 +1213,12 @@
    * 批量下载 —— 多线程并发调度。
    * worker 从共享游标领任务，天然不重复；全部 worker 空闲时结束。
    */
-  async function startBatchDownload(shareUrls) {
+  async function startBatchDownload(shareUrls, requestedConcurrency) {
     if (downloadTask.running) return;
 
-    const targets = shareUrls
+    const targets = [...new Set(shareUrls)]
       .map((url) => mediaList.find((item) => item.shareUrl === url))
-      .filter((item) => item && item.status !== "done");
+      .filter((item) => item && item.status !== "done" && item.status !== "downloading");
 
     if (!targets.length) {
       sendToPanel({ type: "toast", message: "没有需要下载的视频（已完成的不再重复下载）" });
@@ -1191,7 +1228,7 @@
     downloadTask = { running: true, stopped: false };
 
     const total = targets.length;
-    const plan = resolveConcurrency(targets);
+    const plan = resolveConcurrency(targets, requestedConcurrency);
     const workerCount = Math.min(plan.threads, total);
     console.log("[视频下载] 线程数", workerCount, "=", plan.source, "预算", formatSize(plan.usableBytes), "÷ 单条", formatSize(plan.perVideo));
     sendToPanel({ type: "batch_started", total, concurrency: workerCount, memory: plan });
@@ -1272,7 +1309,7 @@
         sendResponse({ ok: false, error: "该网页没有待下载的视频" });
         return true;
       }
-      startBatchDownload(available);
+      startBatchDownload(available, message.concurrency);
       sendResponse({ ok: true, accepted: available.length });
       return true;
     }
