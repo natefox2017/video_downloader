@@ -51,8 +51,9 @@ Functional verification (no automated test framework — verify by hand):
 1. **Extraction and downloading must live in separate worlds.**
    `extractors/*.js` runs in the main world to read page JS variables
    (`window.player`, `__playinfo__`, etc. — invisible from the isolated world);
-   downloading happens only in `content.js` (the isolated world holds `host_permissions`,
-   so `fetch` is not CORS-restricted).
+   downloading remains in `content.js`; **video validation probes live in `background.js`**,
+   where MV3 `host_permissions` allow cross-origin Range requests. Content-script fetch
+   remains subject to normal CORS restrictions, even with host permissions.
    **Do not move `fetch`/download logic into extractor scripts** (the page's CSP will block it),
    **and do not move page-variable reading into `content.js`** (it can't see them).
 2. **Rules go in `rules.js` only, nowhere else.**
@@ -76,7 +77,7 @@ Functional verification (no automated test framework — verify by hand):
    for extension settings, remembered panel position, and the temporary cross-tab media registry;
    downloaded-record persistence remains in the page's `localStorage`.
    `host_permissions: <all_urls>` is required for generic sniffing
-   (direct-link downloads must bypass CORS) — do not narrow it.
+   (service-worker cross-origin verification uses it; it does not bypass CORS in content scripts) — do not narrow it.
 6. **Message protocol changes must be synced both ways.**
    When adding a message type, change the sender / receiver in `content.js` **and**
    `panel.js` together, and update the protocol table in `README.md`.
