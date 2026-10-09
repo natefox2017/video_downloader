@@ -75,11 +75,11 @@ Three ingestion paths merged into one registry:
 2. **DOM scan** — `<video>` elements
 3. **Resource sniffing** — `PerformanceObserver` on resource entries
 
-Plus: floating panel host (Shadow DOM + iframe), download scheduler, concurrency control.
+Plus: floating panel host (Shadow DOM + iframe), independently layered video-preview dialog (sibling in the same shadow root), download scheduler, concurrency control.
 
 ### panel.* — UI (iframe)
 
-Pure presentation. Talks to `content.js` via `postMessage` (cross-origin). Never touches the page directly.
+Pure presentation. Talks to `content.js` via `postMessage` (cross-origin). Never touches the page directly. Its iframe only contains the media list and download action; the preview video element is rendered by `content.js` as a viewport-fixed sibling of the panel, outside the panel's `contain: paint` boundary.
 
 ## Message protocol
 
@@ -94,7 +94,10 @@ Pure presentation. Talks to `content.js` via `postMessage` (cross-origin). Never
 | content → panel | `batch_progress` | `{ completed, total }` |
 | content → panel | `batch_finished` | `{ completed, succeeded, failed, total, stopped }` |
 | content → panel | `toast` | `{ message }` |
+| content → panel | `preview_closed` | `{ shareUrl }` (restore focus to thumbnail) |
 | panel → content | `panel_ready` | — |
+| panel → content | `panel_resize` | `{ height }` measured row heights + action bar; parent caps at 480px and remaining viewport height |
+| panel → content | `open_preview` | `{ shareUrl }` (open independent shadow-root video dialog) |
 | panel → content | `start_download` | `{ shareUrls[] }` |
 | panel → content | `stop_download` | — |
 
