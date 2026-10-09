@@ -108,6 +108,10 @@ Same-window `window.postMessage`, distinguished by `source` field:
 ### content.js → background.js
 
 - `chrome.runtime.sendMessage({ type: "update_badge", count })`
+- `chrome.runtime.sendMessage({ type: "update_media_registry", pageUrl, pageTitle, platform, items })` — title, cover, preview URL, quality, status, progress and the per-tab media key only
+- `chrome.runtime.sendMessage({ type: "get_media_registry" })` — monitor reads the latest per-tab snapshot
+- `chrome.runtime.sendMessage({ type: "start_multi_tab_download", items: [{tabId, shareUrl}], concurrency })` — background groups requests by tab and forwards `start_external_download` with its per-tab worker cap
+- Progress updates are coalesced into approximately one registry update every 900ms per active tab to avoid excessive session writes.
 
 ## Download engine
 
@@ -115,11 +119,11 @@ Same-window `window.postMessage`, distinguished by `source` field:
 
 Adaptive worker pool, not hardcoded:
 
-1. **Estimate**: `memory budget × 70% ÷ avg video size`, clamped to 2–16
+1. **Estimate**: `memory budget × 70% ÷ avg video size`, clamped to 2–16, then capped by the saved per-tab preference (2/4/6/8; 4 by default; automatic disables the manual cap)
    - Budget source priority: `performance.memory.jsHeapSizeLimit` → `navigator.deviceMemory / 2` → fallback constant
 2. **Live guard**: workers check heap before taking tasks; pause above 85%, resume below 60%
 
-Workers start staggered (40ms apart). Shared cursor distributes tasks. m3u8 segments use a separate 6-worker pool.
+Workers start staggered (40ms apart). Shared cursor distributes tasks within each tab. Multiple tabs may download concurrently and each has an independent worker cap, not a global limit. m3u8 segments use a separate 6-worker pool.
 
 ### m3u8
 
