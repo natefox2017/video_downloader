@@ -15,6 +15,10 @@
 .monitor-search>.ui-input{margin:0;padding-left:39px;background:#f8fafc}.monitor-search>.ui-input:focus{background:#fff}
 .monitor-controls{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;padding:13px 25px;border-top:1px solid #edf2f7;border-bottom:1px solid #edf2f7;background:#fbfcff}
 .monitor-controls__right{display:flex;align-items:center;gap:10px;color:#64748b;font-size:12px}.monitor-controls__right>label{margin:0;color:#64748b}
+/* A fixed-width select keeps the single chevron inside the field rather
+ * than at the right edge of the download toolbar. */
+.monitor-controls__right .ui-select-wrap{display:block;flex:0 0 116px;width:116px;min-width:116px;max-width:116px}
+.monitor-controls__right select.ui-select{width:100%;max-width:100%}
 .monitor-controls .ui-select{height:36px;min-height:36px;padding-top:6px;padding-bottom:6px;font-size:12px}
 .monitor-empty{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:8px;margin:22px 25px;min-height:210px;padding:30px;border:1px dashed #dbe3ed;border-radius:12px;background:#fbfcfe;text-align:center}
 .monitor-empty[hidden]{display:none}.monitor-empty__icon{display:grid;place-items:center;width:52px;height:52px;margin-bottom:5px;background:#eff6ff;border-radius:14px;color:#2563eb}.monitor-empty__icon .ui-icon{width:26px;height:26px}
