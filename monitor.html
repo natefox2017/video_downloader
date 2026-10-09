@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>视频下载 - 视频监测</title>
+  <link rel="stylesheet" href="vendor/pico.min.css" />
+  <link rel="stylesheet" href="options.css" />
+  <link rel="stylesheet" href="monitor.css" />
+</head>
+<body>
+  <main class="container">
+    <nav class="app-nav" aria-label="页面导航">
+      <ul>
+        <li><img class="app-logo" src="images/128.png" alt="" /></li>
+        <li><strong>视频监测</strong> <small id="version"></small></li>
+      </ul>
+      <ul>
+        <li><a href="options.html">插件设置</a></li>
+        <li><a href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a></li>
+      </ul>
+    </nav>
+
+    <section class="monitor-panel" aria-labelledby="monitor-title">
+      <div class="monitor-heading">
+        <div>
+          <h1 id="monitor-title">已检测视频</h1>
+          <p>汇总当前打开网页中检测到的视频。选择多个网站的视频后，可以一次批量下载。</p>
+        </div>
+        <button id="refresh-registry" class="secondary outline" type="button">刷新</button>
+      </div>
+
+      <div class="monitor-toolbar">
+        <label class="select-all-label" for="select-all">
+          <input id="select-all" type="checkbox" />
+          全选可下载视频
+        </label>
+        <small id="registry-summary">正在读取…</small>
+      </div>
+
+      <div id="registry-empty" class="monitor-empty" hidden>
+        暂时没有检测到视频。请先打开视频网页并播放视频，再回来刷新。
+      </div>
+      <div id="registry" aria-live="off"></div>
+
+      <div class="monitor-actions">
+        <button id="download-selected" type="button" disabled>下载选中的视频</button>
+        <p id="download-status" class="download-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <footer><small>仅汇总当前打开的网页；关闭标签页后，对应的视频会从这里移除。</small></footer>
+  </main>
+  <script src="monitor.js"></script>
+</body>
+</html>

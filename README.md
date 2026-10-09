@@ -14,8 +14,8 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 - **Multi-platform extractors**: Douyin, Kuaishou, Bilibili, Weibo, Xiaohongshu, Xigua — reads each site's player data (title / author / cover / duration / multi-quality URLs)
 - **Generic sniffing**: any other site is covered by scanning `<video>` elements and observing network resources; direct links and m3u8 playlists both picked up
 - **Extension icon badge**: shows the number of detected videos on the current tab in real time
-- **Cross-tab queue**: the Settings page aggregates detected videos from all open tabs and can dispatch one batch download across multiple sites
-- **Settings page**: source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, remembered panel position, repository and bug-report links
+- **Cross-tab video monitor**: a standalone Monitor page aggregates detected videos from all open tabs and dispatches batch downloads across multiple sites
+- **Settings page**: source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, remembered panel position, repository and bug-report links (separate from the video monitor)
 - **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status
 - **Batch downloads**: newly detected videos are selected automatically; when multiple videos are present, uncheck any you do not want
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
@@ -54,7 +54,7 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 3. Click the icon → floating panel appears; its last dragged position is restored when enabled in Settings
 4. Check the rows you want (newly detected videos are selected automatically)
 5. Click **Download selected**
-6. For cross-site batches, open the panel's Settings button and use **Detected videos** to select media from multiple open tabs
+6. For cross-site batches, open **Settings → 视频监测与批量下载**; the Monitor opens as a separate page and groups videos by browser tab
 7. Files land in your browser's default download directory
 
 ### Panel guide
@@ -101,7 +101,8 @@ Download the latest `.zip` from [Releases](../../releases), unzip, and load unpa
 │   ├── weibo.js
 │   └── xiaohongshu.js
 ├── panel.html / .css / .js # Floating panel UI (iframe, vanilla JS)
-├── options.html / .css / .js # Standalone settings + cross-tab detected-video queue
+├── options.html / .css / .js # Download preferences and per-platform settings
+├── monitor.html / .css / .js # Separate cross-tab video monitor and batch queue
 ├── vendor/pico.min.css     # Vendored Pico CSS 2.1.1 (MIT), settings UI
 ├── images/                 # Extension icons
 ├── docs/                   # Detailed documentation
@@ -158,6 +159,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To add a platform, see [docs/ADD_PLATFOR
 
 ## Settings implementation
 
-The standalone options page uses vendored **Pico CSS 2.1.1 (MIT)**. It does not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
+The standalone Settings and Monitor pages both use vendored **Pico CSS 2.1.1 (MIT)**. They do not use a CDN or add a build step. The format setting never transcodes media: “MP4 preferred” only prioritizes an MP4 source when the site actually exposes one. Quality labels and sizes are shown only when an extractor or playlist provides real metadata; otherwise the UI reports them as unknown.
 
-The cross-tab detected-video list is stored temporarily in `chrome.storage.session`. Only identifying display fields and the per-tab media key are stored there; actual downloads are still executed inside the original page's `content.js`.
+The dedicated `monitor.html` page shows the cross-tab detected-video list, grouped by website tab. The registry is stored temporarily in `chrome.storage.session`; updates from multiple tabs are serialized to avoid lost reports. Only display fields and the per-tab media key are stored there. Checked video selections are preserved during live updates, and actual downloads still execute inside each originating tab's `content.js`. Closing or navigating a tab removes its prior entries.

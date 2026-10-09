@@ -1260,8 +1260,20 @@
       return true;
     }
     if (message.type === "start_external_download") {
-      startBatchDownload(Array.isArray(message.shareUrls) ? message.shareUrls : []);
-      sendResponse({ ok: true });
+      if (downloadTask.running) {
+        sendResponse({ ok: false, error: "当前网页仍有下载任务在进行" });
+        return true;
+      }
+      const shareUrls = Array.isArray(message.shareUrls) ? [...new Set(message.shareUrls)] : [];
+      const available = shareUrls.filter((url) =>
+        mediaList.some((item) => item.shareUrl === url && item.status !== "done")
+      );
+      if (!available.length) {
+        sendResponse({ ok: false, error: "该网页没有待下载的视频" });
+        return true;
+      }
+      startBatchDownload(available);
+      sendResponse({ ok: true, accepted: available.length });
       return true;
     }
     return undefined;

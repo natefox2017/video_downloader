@@ -48,28 +48,38 @@ async function readRegistry() {
   return registry && typeof registry === "object" ? registry : {};
 }
 
-async function writeRegistry(registry) {
-  await chrome.storage.session.set({ [REGISTRY_KEY]: registry });
+// Serialize read-modify-write: simultaneous updates from separate tabs must not overwrite each other.
+let registryQueue = Promise.resolve();
+
+function mutateRegistry(mutate) {
+  const task = registryQueue.catch(() => {}).then(async () => {
+    const registry = await readRegistry();
+    const changed = mutate(registry);
+    if (changed !== false) await chrome.storage.session.set({ [REGISTRY_KEY]: registry });
+  });
+  registryQueue = task;
+  return task;
 }
 
-async function updateRegistry(tabId, message) {
-  const registry = await readRegistry();
-  registry[String(tabId)] = {
-    tabId,
-    pageUrl: message.pageUrl || "",
-    pageTitle: message.pageTitle || "",
-    platform: message.platform || "",
-    updatedAt: Date.now(),
-    items: Array.isArray(message.items) ? message.items : [],
-  };
-  await writeRegistry(registry);
+function updateRegistry(tabId, message) {
+  return mutateRegistry((registry) => {
+    registry[String(tabId)] = {
+      tabId,
+      pageUrl: message.pageUrl || "",
+      pageTitle: message.pageTitle || "",
+      platform: message.platform || "",
+      updatedAt: Date.now(),
+      items: Array.isArray(message.items) ? message.items : [],
+    };
+  });
 }
 
-async function removeRegistryTab(tabId) {
-  const registry = await readRegistry();
-  if (!Object.prototype.hasOwnProperty.call(registry, String(tabId))) return;
-  delete registry[String(tabId)];
-  await writeRegistry(registry);
+function removeRegistryTab(tabId) {
+  return mutateRegistry((registry) => {
+    const key = String(tabId);
+    if (!Object.prototype.hasOwnProperty.call(registry, key)) return false;
+    delete registry[key];
+  });
 }
 
 async function setBadge(tabId, count) {
@@ -90,17 +100,21 @@ async function dispatchMultiTabDownload(items) {
     const tabId = Number(item?.tabId);
     const shareUrl = String(item?.shareUrl || "");
     if (!Number.isInteger(tabId) || !shareUrl) continue;
-    if (!grouped.has(tabId)) grouped.set(tabId, []);
-    grouped.get(tabId).push(shareUrl);
+    if (!grouped.has(tabId)) grouped.set(tabId, new Set());
+    grouped.get(tabId).add(shareUrl);
   }
 
   let tabsStarted = 0;
   let videosRequested = 0;
   for (const [tabId, shareUrls] of grouped) {
     try {
-      await chrome.tabs.sendMessage(tabId, { type: "start_external_download", shareUrls });
+      const response = await chrome.tabs.sendMessage(tabId, {
+        type: "start_external_download",
+        shareUrls: [...shareUrls],
+      });
+      if (!response?.ok) continue;
       tabsStarted += 1;
-      videosRequested += shareUrls.length;
+      videosRequested += Number(response.accepted) || shareUrls.size;
     } catch (error) {
       console.warn("[视频下载] 无法向标签页下发批量下载任务：", tabId, error);
     }
@@ -135,9 +149,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "get_media_registry") {
-    readRegistry().then((registry) => sendResponse({ ok: true, registry })).catch((error) => {
-      sendResponse({ ok: false, error: error.message || String(error) });
-    });
+    registryQueue.catch(() => {}).then(readRegistry)
+      .then((registry) => sendResponse({ ok: true, registry }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
 

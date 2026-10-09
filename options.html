@@ -9,12 +9,13 @@
 </head>
 <body>
   <main class="container">
-    <nav>
+    <nav class="app-nav" aria-label="页面导航">
       <ul>
         <li><img class="app-logo" src="images/128.png" alt="" /></li>
         <li><strong>视频下载</strong> <small id="version"></small></li>
       </ul>
       <ul>
+        <li><a href="monitor.html">视频监测与批量下载</a></li>
         <li><a href="https://github.com/natefox2017/video_downloader" target="_blank" rel="noreferrer">开源仓库</a></li>
         <li><a href="https://github.com/natefox2017/video_downloader/issues/new" target="_blank" rel="noreferrer">反馈 Bug</a></li>
       </ul>
@@ -23,19 +24,19 @@
     <section>
       <h2>下载设置</h2>
       <div class="settings-grid">
-        <label>
-          视频格式
+        <div class="settings-field">
+          <label for="format">视频格式</label>
           <select id="format">
             <option value="source">源格式（推荐）</option>
             <option value="mp4">MP4 优先（有 MP4 源时）</option>
           </select>
-          <small>插件不转码；这里只改变已有候选源的优先级。</small>
-        </label>
-        <label>
-          默认清晰度
+          <small>不转码，只调整现有视频源的下载优先级。</small>
+        </div>
+        <div class="settings-field">
+          <label for="quality">默认清晰度</label>
           <select id="quality"></select>
-          <small>仅在页面实际提供多清晰度源时生效；没有对应清晰度会自动选最接近的可用源。</small>
-        </label>
+          <small>仅在页面提供多个清晰度时生效。</small>
+        </div>
       </div>
       <label>
         <input id="remember-position" type="checkbox" role="switch" />
@@ -45,7 +46,7 @@
 
     <section>
       <h2>各平台解析方式</h2>
-      <p><small>“智能”使用该平台当前最可靠的默认方式，同时保留另一种方式作为失败回退。</small></p>
+      <p class="section-hint">智能模式使用平台默认方式，另一种方式仍可作为回退。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>平台</th><th>默认方式</th><th>当前设置</th></tr></thead>
@@ -54,19 +55,6 @@
       </div>
     </section>
 
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>已检测视频</h2>
-          <p><small>汇总所有当前打开网页标签页检测到的视频，可跨网站一起批量下载。</small></p>
-        </div>
-        <button id="refresh-registry" class="secondary outline" type="button">刷新</button>
-      </div>
-      <div id="registry-empty"><small>暂时没有检测到视频。先在网页里播放视频。</small></div>
-      <div id="registry"></div>
-      <button id="download-selected" type="button" disabled>下载选中的视频</button>
-      <small id="download-status"></small>
-    </section>
 
     <section>
       <h2>Bug 反馈</h2>
@@ -83,7 +71,7 @@
     </section>
 
     <footer>
-      <small>设置页 UI 基于 Pico CSS 2.1.1（MIT）。</small>
+      <small>基于 Pico CSS 2.1.1（MIT） · <a href="monitor.html">前往视频监测</a></small>
     </footer>
   </main>
   <script src="rules.js"></script>
