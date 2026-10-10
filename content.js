@@ -1517,29 +1517,81 @@
 
   /* ---------------- m3u8 下载：分段拉取 + 合并 ---------------- */
 
-  /** 带超时的文本请求 */
+  /**
+   * Request HLS playlist text with cancellation and a bounded timeout.
+   * @param {string} url HTTP(S) playlist URL.
+   * @param {number} timeoutMs Maximum time for the entire request.
+   * @returns {Promise<string>} Playlist text.
+   */
   async function fetchTextWithTimeout(url, timeoutMs) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    activeDownloadControllers.add(controller);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
+      if (downloadTask.stopped) throw new Error("用户已停止");
       const response = await fetch(url, { credentials: "omit", signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw transferHttpError(response);
       return await response.text();
+    } catch (error) {
+      if (downloadTask.stopped) throw new Error("用户已停止");
+      if (timedOut) {
+        const failure = new Error("HLS 播放列表请求超时");
+        failure.retryable = true;
+        throw failure;
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
+      activeDownloadControllers.delete(controller);
     }
   }
 
-  /** 带超时的二进制请求 */
-  async function fetchBytesWithTimeout(url, timeoutMs) {
+  /**
+   * Request one HLS fragment. Track the controller both globally (Stop)
+   * and within its playlist (abort siblings after an unrecoverable error).
+   * @param {string} url HTTP(S) segment URL.
+   * @param {number} timeoutMs Maximum time for the whole fragment.
+   * @param {Set<AbortController>|null} groupControllers Playlist-local controllers.
+   * @returns {Promise<ArrayBuffer>} Verified fragment payload.
+   */
+  async function fetchBytesWithTimeout(url, timeoutMs, groupControllers = null) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    activeDownloadControllers.add(controller);
+    groupControllers?.add(controller);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
+      if (downloadTask.stopped) throw new Error("用户已停止");
       const response = await fetch(url, { credentials: "omit", signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.arrayBuffer();
+      if (!response.ok) throw transferHttpError(response);
+      const bytes = await response.arrayBuffer();
+      const length = Number(response.headers.get("content-length")) || 0;
+      const encoding = (response.headers.get("content-encoding") || "").toLowerCase();
+      if (length > 0 && (!encoding || encoding === "identity") && bytes.byteLength !== length) {
+        const failure = new Error("视频分段内容不完整");
+        failure.retryable = true;
+        throw failure;
+      }
+      return bytes;
+    } catch (error) {
+      if (downloadTask.stopped) throw new Error("用户已停止");
+      if (timedOut) {
+        const failure = new Error("视频分段请求超时");
+        failure.retryable = true;
+        throw failure;
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
+      groupControllers?.delete(controller);
+      activeDownloadControllers.delete(controller);
     }
   }
 
@@ -1645,13 +1697,21 @@
     if (!playlistUrl) throw new Error("没有可用的播放列表地址");
 
     // 1) 取播放列表；主列表则选最高码率
-    let playlistText = await fetchTextWithTimeout(playlistUrl, DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS);
+    let playlistText = await transferWithRetries(
+      () => fetchTextWithTimeout(playlistUrl, DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS),
+      DOWNLOAD_RULES.M3U8_PLAYLIST_RETRIES,
+      "HLS 播放列表"
+    );
     let playlistBase = playlistUrl;
     if (playlistText.includes("#EXT-X-STREAM-INF")) {
       const variantUrl = pickBestVariant(playlistText, playlistUrl);
       if (!variantUrl) throw new Error("播放列表中没有可用的清晰度");
       playlistBase = variantUrl;
-      playlistText = await fetchTextWithTimeout(variantUrl, DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS);
+      playlistText = await transferWithRetries(
+        () => fetchTextWithTimeout(variantUrl, DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS),
+        DOWNLOAD_RULES.M3U8_PLAYLIST_RETRIES,
+        "HLS 清晰度列表"
+      );
     }
 
     // 2) Only a valid HLS video manifest can enter the segment download path.
@@ -1666,26 +1726,44 @@
 
     // 3) 并发下载分段（顺序组装，不乱序）
     const parts = new Array(total);
+    const segmentControllers = new Set();
     let completed = 0;
     let cursor = 0;
+    let firstFailure = null;
 
     async function segmentWorker() {
-      while (!downloadTask.stopped) {
+      while (!downloadTask.stopped && !firstFailure) {
         const index = cursor++;
         if (index >= total) return;
-        const buffer = await fetchBytesWithTimeout(tasks[index], DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS);
-        if (buffer.byteLength < DOWNLOAD_RULES.MIN_VALID_BYTES) {
-          throw new Error(`第 ${index + 1} 个分段下载内容为空`);
+        try {
+          const buffer = await transferWithRetries(
+            () => fetchBytesWithTimeout(tasks[index], DOWNLOAD_RULES.M3U8_SEGMENT_TIMEOUT_MS, segmentControllers),
+            DOWNLOAD_RULES.M3U8_SEGMENT_RETRIES,
+            "HLS 分段 " + (index + 1)
+          );
+          if (firstFailure || downloadTask.stopped) return;
+          if (buffer.byteLength < DOWNLOAD_RULES.MIN_VALID_BYTES) {
+            throw new Error("第 " + (index + 1) + " 个分段下载内容为空");
+          }
+          // Completed segments occupy their original indices despite concurrent workers.
+          parts[index] = buffer;
+          completed++;
+          if (onProgress) onProgress(Math.min(99, Math.floor((completed / total) * 100)));
+        } catch (error) {
+          if (!firstFailure) {
+            firstFailure = error;
+            // Abort only this playlist's siblings, not other videos in the batch.
+            for (const controller of segmentControllers) controller.abort();
+          }
+          return;
         }
-        parts[index] = buffer;
-        completed++;
-        if (onProgress) onProgress(Math.min(99, Math.floor((completed / total) * 100)));
       }
     }
 
     const workerCount = Math.min(DOWNLOAD_RULES.M3U8_SEGMENT_CONCURRENCY, total);
     await Promise.all(Array.from({ length: workerCount }, () => segmentWorker()));
     if (downloadTask.stopped) throw new Error("用户已停止");
+    if (firstFailure) throw firstFailure;
 
     // 4) 按顺序拼接（同编码的 TS / fMP4 分段直接拼接即可播放）
     return {
