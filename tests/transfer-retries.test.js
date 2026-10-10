@@ -90,7 +90,7 @@ function makeEnv(overrides = {}) {
     Blob,
     AbortController,
     Uint8Array,
-    console: { warn: (...args) => messages.push(args) },
+    console: { warn: (...args) => messages.push(args), log() {} },
     setTimeout,
     clearTimeout,
     sleep: async (ms) => { pauses.push(ms); },
