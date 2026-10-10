@@ -130,15 +130,16 @@ Adaptive worker pool, not hardcoded:
    - Budget source priority: `performance.memory.jsHeapSizeLimit` → `navigator.deviceMemory / 2` → fallback constant
 2. **Live guard**: workers check heap before taking tasks; pause above 85%, resume below 60%
 
-Known very large sources also cap combined in-flight video sizes to approximately 512 MiB per tab; sources with unknown sizes use at most two parallel workers. A direct-transfer stall aborts after 20 seconds without a received chunk, rather than claiming 85–90% while idle. Workers start staggered (40ms apart). Shared cursor distributes tasks within each tab. Multiple tabs may download concurrently and each has an independent worker cap, not a global limit. m3u8 segments use a separate 6-worker pool.
+Known very large sources also cap combined in-flight video sizes to approximately 512 MiB per tab; sources with unknown sizes use at most two parallel workers. A direct-transfer stall aborts after 20 seconds without a received chunk, rather than claiming 85–90% while idle. Direct video fetches compare actual bytes to Content-Length for identity-encoded responses, retry transient failures once, and reset displayed progress between whole-file attempts; temporary 403/404 and invalid video responses are not retried. This is not an interrupted-download resume feature. Workers start staggered (40ms apart). Shared cursor distributes tasks within each tab. Multiple tabs may download concurrently and each has an independent worker cap, not a global limit. m3u8 segments use a separate 6-worker pool.
 
 ### m3u8
 
 1. Pick highest-bandwidth variant from master playlist
 2. Resolve relative URLs, handle `EXT-X-MAP`
-3. Download segments concurrently → concatenate
+3. Download segments concurrently (6 workers), retry individual transient failures up to twice, and keep each result at its original playlist index → concatenate
 4. `.ts` segments → `.ts` file; fMP4 → `.mp4`
 5. `EXT-X-KEY` (encrypted) → explicit error, never silent
+6. Both playlists and segments have AbortControllers tracked for the Stop command. On an unrecoverable fragment error, abort only the remaining requests from its playlist (do not cancel other videos downloading in parallel). Playlist fetches retry transient failures once; canceled requests never retry.
 
 ### Audio tracks
 

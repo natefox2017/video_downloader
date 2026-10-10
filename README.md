@@ -17,7 +17,7 @@ A Chrome extension (Manifest V3) that automatically detects videos on web pages 
 - **Cross-tab video monitor**: the Batch Download item in the shared left sidebar opens a standalone Monitor page aggregating videos from all open tabs
 - **Settings page**: sidebar-style admin UI for source format / MP4 preference, preferred quality, per-platform extractor-vs-sniffer strategy, per-site batch concurrency and remembered panel position; repository and bug-report links live in the sidebar
 - **Compact panel UI**: shows video title, real known file size / quality, a small preview thumbnail, selection when needed, and essential download status. The content height adapts to the number of rows; only lists exceeding the 480px body cap (or the remaining viewport) scroll
-- **Batch downloads**: multi-select, per-site checkboxes, filtered search, independent tab identities, real transfer-byte progress, a 20-second idle-transfer timeout and adaptive memory-bounded concurrency
+- **Batch downloads**: multi-select, per-site checkboxes, filtered search, independent tab identities, real transfer-byte progress, a 20-second idle-transfer timeout, completed-byte verification, bounded network retries and adaptive memory-bounded concurrency
 - **m3u8 merging**: segments downloaded concurrently and merged into a single file (`.ts` for TS, `.mp4` for fMP4); encrypted streams reported as unsupported
 - **Audio track handling**: detects DASH video-only streams (e.g. Bilibili) and downloads the separate audio track automatically
 - **Zero build step**: vanilla JS, no frameworks, no dependencies, no bundler
@@ -81,7 +81,7 @@ See [Chrome Web Store release and submission guide](docs/RELEASE_CRX.md) for rev
 | Result row | Shows a small preview thumbnail, video title, file size, and selection when multiple videos are detected |
 | Preview | Click the thumbnail to open a standalone viewport-sized video dialog *outside* the 320px panel iframe; close with Escape, backdrop or close button |
 | Bottom bar | Download the selected video(s) or stop the active batch |
-| Panel header | Drag the title bar to reposition. Collapsing creates a draggable white circular launcher with a purple arrow and shadow; click it to expand. Settings opens the standalone options page |
+| Panel header | Drag the title bar to reposition. Collapsing creates a draggable purple circular launcher with a white arrow and shadow; click it to expand. Settings opens the standalone options page |
 
 ## Supported platforms
 
@@ -165,12 +165,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Download behavior
 
-- **Direct links**: candidate URLs are ordered by the saved format / quality preference when real variant metadata is available, then tried with fallback
-- **m3u8**: master-playlist variants follow the saved quality preference when resolution metadata is present → segments downloaded concurrently (6 workers) → merged
+- **Direct links**: candidate URLs are ordered by saved format/quality preferences, then tried with fallback. Temporary failures retry a URL once with bounded backoff, resetting progress. Identity-encoded responses must match the declared Content-Length before saving; permanently invalid video responses and HTTP 403/404 never retry. This does not support resuming a large partial file across browser sessions
+- **m3u8**: master-playlist variants follow the saved quality preference when resolution metadata is present → playlists retry once on transient failure → segments download concurrently (6 workers) and retry individually up to twice → merge in playlist order. A permanent segment failure aborts sibling requests for that playlist only, without aborting other videos in the batch
 - **DASH video-only** (e.g. Bilibili): separate audio track downloaded automatically as `*_audio.m4a`
 - **Concurrency**: a per-originating-tab preference (2/4/6/8 concurrent videos; 4 by default; automatic mode available) caps the adaptive estimate of `memory budget × 70% ÷ avg video size` (2–16 workers), additionally limited to approximately 512 MiB of concurrently fetched known video sizes (unknown sizes default to two concurrent workers). Heap pressure is still monitored live. Multiple tabs run independently; this is not a global concurrency cap
 - **Encrypted streams** (`EXT-X-KEY`): reported as unsupported, never silently skipped
 - **Media verification**: the service worker probes at most the first 16 KiB, rejects HTML/audio/isolated segments, and publishes videos only when source evidence is present. Signed URLs can expire after verification; final download failures remain visible as errors rather than indefinite progress.
+- **Reference implementations**: [yt-dlp fragment retry policy](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/downloader/fragment.py) and [Cobalt transfer worker](https://github.com/imputnet/cobalt/blob/main/web/src/lib/task-manager/workers/fetch.ts) informed the bounded-retry and complete-byte verification approach. We keep a simpler in-memory implementation without copying those projects' code or introducing extra dependencies.
 
 ## Contributing
 

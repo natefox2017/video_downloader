@@ -99,6 +99,13 @@ Functional verification (no automated test framework — verify by hand):
    (direct link vs m3u8) all live in `content.js`;
    when an extractor's reported media object is missing fields, `content.js`
    fills defaults — don't put business logic in extractor scripts.
+10. **Do not mark truncated transfers complete.**
+   Identity-encoded downloads must check actual bytes against Content-Length.
+   Retry transient network/timeout/HTTP errors only, with finite limits from
+   `rules.js`; never retry 403/404, invalid formats, or explicit Stop. Whole-video
+   retries start again (no partial resume) and reset progress. HLS segment retries
+   retain original indices, and a fatal segment failure cancels only that
+   playlist's in-flight requests, not unrelated batch downloads.
 
 ---
 
@@ -109,7 +116,7 @@ Functional verification (no automated test framework — verify by hand):
 | **`performance.memory` is a getter returning a fresh snapshot each access** | Storing it in a variable and re-reading properties in a polling loop always returns that frozen instant — freed memory will never show. **Access `performance.memory` anew every time** |
 | **`blob.arrayBuffer()` copies the entire payload** | Audio-track detection may only call it on `blob.slice(0, 2MB)`; calling it on the whole Blob duplicates a full video's worth of memory per concurrent worker |
 | **Worker stagger delay must not be too long** | Measured: 10 workers × 80 ms stagger = 720 ms span, so files that return in 300 ms only ever reach a peak concurrency of 8. The current 40 ms is deliberately tight — do the math before raising it |
-| **m3u8 segments must be assembled in order** | When downloading segments concurrently, reserve slots in an index array — **never** push in completion order, or the merged file will glitch or refuse to play |
+| **m3u8 segments must be assembled in order** | When downloading segments concurrently and retrying individual fragments, reserve slots in an index array — **never** push in completion order, or the merged file will glitch or refuse to play |
 | **m3u8 relative paths resolve against the playlist URL** | After picking a variant, the media playlist's base is the **variant URL**, not the original master URL — using the wrong base causes 404s |
 | **Bilibili direct links expire quickly** | The `__playinfo__` durl signature has a short lifetime; download soon after capture, don't cache links for "later" |
 | **`blob:` URLs can't be downloaded** | In-page `blob:` URLs are temporary object URLs that die on navigation — filter them at sniffing time, never let them into the list |
