@@ -254,6 +254,17 @@ const DOWNLOAD_RULES = {
   /** Stop a direct transfer after this long without a received byte. */
   DIRECT_IDLE_TIMEOUT_MS: 20000,
 
+  /** yt-dlp and cobalt retry transient transfers; cap full-video retries to avoid excess bandwidth. */
+  DIRECT_RETRIES: 1,
+
+  /** Retry failed HLS fragments independently rather than restarting an entire playlist. */
+  M3U8_SEGMENT_RETRIES: 2,
+  M3U8_PLAYLIST_RETRIES: 1,
+
+  /** Bounded exponential backoff for retryable network/HTTP failures. */
+  TRANSFER_RETRY_BASE_DELAY_MS: 400,
+  TRANSFER_RETRY_MAX_DELAY_MS: 1600,
+
   /** Prevent concurrent multi-hundred-MB Blobs from overwhelming a tab. */
   MAX_INFLIGHT_MEDIA_BYTES: 512 * 1024 * 1024,
 
