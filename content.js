@@ -1279,6 +1279,77 @@
   const activeDownloadControllers = new Set();
 
   /**
+   * Retain HTTP status separately from the display message so retry decisions
+   * do not depend on matching translated error strings.
+   * @param {Response} response Failed HTTP response.
+   * @returns {Error} Error carrying its original HTTP status code.
+   */
+  function transferHttpError(response) {
+    const error = new Error("HTTP " + response.status);
+    error.status = response.status;
+    return error;
+  }
+
+  /**
+   * Retry network errors and transient HTTP failures, but not expired media
+   * signatures (403/404), unsupported formats, or invalid video responses.
+   * @param {Error} error Last failed transfer.
+   * @returns {boolean} Whether repeating the same URL is worth attempting.
+   */
+  function isRetryableTransferError(error) {
+    if (error?.retryable === true || error?.name === "TypeError") return true;
+    return [408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+      .includes(Number(error?.status));
+  }
+
+  /**
+   * Stop-aware retry delay. Polling at most every 100ms allows a stopped batch
+   * to abandon a backoff promptly, without keeping orphaned timeout handlers.
+   * @param {number} delayMs Requested wait in milliseconds.
+   * @returns {Promise<void>}
+   */
+  async function waitForTransferRetry(delayMs) {
+    let remaining = delayMs;
+    while (remaining > 0) {
+      if (downloadTask.stopped) throw new Error("用户已停止");
+      const slice = Math.min(remaining, 100);
+      await sleep(slice);
+      remaining -= slice;
+    }
+    if (downloadTask.stopped) throw new Error("用户已停止");
+  }
+
+  /**
+   * Bound transient retries and wait with exponential backoff. No arbitrary
+   * upload, CORS bypass, or retry of permanently rejected media occurs here.
+   * @param {Function} run Re-creates a fresh fetch on every attempt.
+   * @param {number} retryLimit Additional attempts after the first.
+   * @param {string} description Diagnostic label without signed media URLs.
+   * @param {Function|null} onRetry Called before waiting (for progress reset).
+   * @returns {Promise<*>} Successful transfer result.
+   */
+  async function transferWithRetries(run, retryLimit, description, onRetry = null) {
+    for (let retryIndex = 0; ; retryIndex++) {
+      if (downloadTask.stopped) throw new Error("用户已停止");
+      try {
+        return await run();
+      } catch (error) {
+        if (downloadTask.stopped || !isRetryableTransferError(error) || retryIndex >= retryLimit) {
+          throw error;
+        }
+        onRetry?.();
+        const waitMs = Math.min(
+          DOWNLOAD_RULES.TRANSFER_RETRY_MAX_DELAY_MS,
+          DOWNLOAD_RULES.TRANSFER_RETRY_BASE_DELAY_MS * (2 ** retryIndex)
+        );
+        console.warn("[视频下载] " + description + " 网络异常，" + waitMs +
+          "ms 后重试 (" + (retryIndex + 1) + "/" + retryLimit + ")", error);
+        await waitForTransferRetry(waitMs);
+      }
+    }
+  }
+
+  /**
    * A rolling idle timeout aborts stalled transfers without cutting off
    * healthy large videos after an arbitrary two-minute wall-clock limit.
    * The response type and initial bytes are checked before retaining data.
@@ -1304,7 +1375,7 @@
     try {
       if (downloadTask.stopped) throw new Error("用户已停止");
       const response = await fetch(url, { credentials: "omit", signal: controller.signal });
-      if (!response.ok) throw new Error("HTTP " + response.status);
+      if (!response.ok) throw transferHttpError(response);
       const mime = response.headers.get("content-type") || "";
       if (expectedKind === "video" && isRejectedMediaMimeType(mime)) throw new Error("服务器返回非视频内容：" + mime);
       if (expectedKind !== "video" && /^(text\/|application\/(json|xml|xhtml))/i.test(mime)) {
@@ -1347,11 +1418,21 @@
         throw error;
       }
       if (loaded < DOWNLOAD_RULES.MIN_VALID_BYTES) throw new Error("视频内容为空或不完整");
+      // Only identity-encoded responses have a Content-Length comparable to
+      // decoded stream bytes. A truncated 200 response must never be saved.
+      const encoding = (response.headers.get("content-encoding") || "").toLowerCase();
+      if (total > 0 && (!encoding || encoding === "identity") && loaded !== total) {
+        const error = new Error("下载不完整：收到 " + loaded + " / " + total + " 字节");
+        error.retryable = true;
+        throw error;
+      }
       return new Blob(chunks, { type: mime || "application/octet-stream" });
     } catch (error) {
       if (controller.signal.aborted && downloadTask.stopped) throw new Error("用户已停止");
       if (timedOut || error.name === "AbortError") {
-        throw new Error("下载停滞：" + Math.round(timeoutMs / 1000) + " 秒未收到数据");
+        const failure = new Error("下载停滞：" + Math.round(timeoutMs / 1000) + " 秒未收到数据");
+        failure.retryable = true;
+        throw failure;
       }
       throw error;
     } finally {
@@ -1417,7 +1498,12 @@
           if (!proof || proof.kind !== "video") throw new Error("候选地址不是有效视频");
         }
         onProgress?.(0);
-        const blob = await fetchWithProgress(url, onProgress);
+        const blob = await transferWithRetries(
+          () => fetchWithProgress(url, onProgress),
+          DOWNLOAD_RULES.DIRECT_RETRIES,
+          "视频直链",
+          () => onProgress?.(0)
+        );
         if (blob.size < DOWNLOAD_RULES.MIN_VALID_BYTES) throw new Error("文件内容为空");
         return { blob, url };
       } catch (error) {
